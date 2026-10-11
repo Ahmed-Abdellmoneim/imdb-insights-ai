@@ -69,6 +69,27 @@ about two days of the OMDb free quota; re-running is safe and cheap because resp
 > **Windows note:** if an Application Control policy blocks the `.exe` launchers that uv
 > creates (`os error 4551`), run tools as modules (`uv run python -m pytest`), as above.
 
+## Deployment
+
+```
+GitHub Actions (daily) ──► pull API cache ◄── private Hugging Face dataset ──► Streamlit app
+        │                                            ▲                       (syncs hourly,
+        └─► ingest (only new / expired data) ─► push warehouse + cache       read-only token)
+```
+
+- **Private data, public code.** TMDB data may not be redistributed in bulk, so the warehouse
+  lives in a private Hugging Face dataset; `publish` refuses to write to a public one and
+  squashes history on every push so storage stays flat.
+- **Incremental.** Cached responses expire after ~7 days (TMDB) and ~14 days (OMDb), spread
+  per key so refreshes are distributed across days and stay inside OMDb's daily quota.
+  Movies with no rating at all are fetched first; if a refresh fails, the last known value
+  is kept and counted in the manifest.
+- **Zero-downtime refresh.** The app polls for a new warehouse at most hourly and swaps it in
+  atomically; a failed download keeps the current data.
+
+Configuration: repository secrets `TMDB_API_KEY`, `OMDB_API_KEY`, `HF_TOKEN` (write) and the
+variable `HF_DATASET_REPO`; the Streamlit app needs `HF_TOKEN` (read-only) and `HF_DATASET_REPO`.
+
 ## Why APIs, not scraping
 
 - IMDb returns `403 Forbidden` to automated browsers and requires sign-in for more than five
@@ -82,7 +103,7 @@ about two days of the OMDb free quota; re-running is safe and cheap because resp
 
 - [x] Resumable multi-source ingestion, DuckDB warehouse, IMDb-style ranking, tests, CI
 - [x] Streamlit app rebuilt on the new warehouse, with smoke tests for every page
-- [ ] Deployment with a scheduled data refresh
+- [x] Deployment pipeline: daily refresh via GitHub Actions, private Hugging Face storage
 - [ ] Review rating prediction: embeddings baseline vs fine-tuned transformer vs LLM, with
       proper evaluation (Stanford Large Movie Review Dataset + TMDB reviews)
 - [ ] AI assistant: text-to-SQL over the warehouse + retrieval over reviews, with citations
