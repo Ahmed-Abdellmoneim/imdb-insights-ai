@@ -52,8 +52,16 @@ Requires [uv](https://docs.astral.sh/uv/) and free API keys from
 uv sync
 cp .env.example .env        # then fill in TMDB_API_KEY (read access token) and OMDB_API_KEY
 uv run python -m imdb_insights.ingest
+uv run python -m streamlit run streamlit_app.py
 uv run python -m pytest
 ```
+
+The app has four pages: the **Top 250** (filterable, with posters), a **Movie** page (ratings
+from four sources, crew, cast, keywords, reviews; shareable via `?id=<tmdb id>`),
+**Insights** (decades, genres, directors, actors, IMDb vs TMDB, critics vs audiences, budget vs
+box office; every chart has a table view), and **About the data** (method and latest run).
+The pipeline can refresh the data while the app is running: it builds the new database in a
+temporary file and swaps it in with one rename.
 
 Options: `--min-rating`, `--min-votes`, `--data-dir` (see `--help`). A first full run needs
 about two days of the OMDb free quota; re-running is safe and cheap because responses are cached.
@@ -73,7 +81,8 @@ about two days of the OMDb free quota; re-running is safe and cheap because resp
 ## Roadmap
 
 - [x] Resumable multi-source ingestion, DuckDB warehouse, IMDb-style ranking, tests, CI
-- [ ] Streamlit app rebuilt on the new warehouse
+- [x] Streamlit app rebuilt on the new warehouse, with smoke tests for every page
+- [ ] Deployment with a scheduled data refresh
 - [ ] Review rating prediction: embeddings baseline vs fine-tuned transformer vs LLM, with
       proper evaluation (Stanford Large Movie Review Dataset + TMDB reviews)
 - [ ] AI assistant: text-to-SQL over the warehouse + retrieval over reviews, with citations

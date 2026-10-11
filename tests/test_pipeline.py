@@ -103,6 +103,33 @@ def test_full_run_builds_ranked_tables(tmp_path):
     assert (tmp_path / "out" / "movies.parquet").exists()
 
 
+def test_rewrite_swaps_in_a_fresh_database(tmp_path):
+    col, _ = run_collect(tmp_path, omdb_quota=1000)
+    tables = pipeline.build_tables(col)
+    report = pipeline.quality_report(col, tables)
+    out = tmp_path / "out"
+    pipeline.write_outputs(tables, report, out, started=pipeline.datetime.now())
+
+    fewer = {name: df.head(5) if name == "movies" else df for name, df in tables.items()}
+    db = pipeline.write_outputs(fewer, report, out, started=pipeline.datetime.now())
+    with duckdb.connect(str(db), read_only=True) as con:
+        assert con.sql("select count(*) from movies").fetchone()[0] == 5
+    assert not list(out.glob("*.building"))
+
+
+def test_empty_tables_still_exist_with_their_schema(tmp_path):
+    col, _ = run_collect(tmp_path, omdb_quota=1000)
+    tables = pipeline.build_tables(col)
+    tables["reviews"] = pipeline.pd.DataFrame()
+    db = pipeline.write_outputs(
+        tables, pipeline.quality_report(col, tables), tmp_path / "out", pipeline.datetime.now()
+    )
+    with duckdb.connect(str(db), read_only=True) as con:
+        assert con.sql("select count(*) from reviews").fetchone()[0] == 0
+        columns = [c[0] for c in con.sql("describe reviews").fetchall()]
+    assert {"review_id", "tmdb_id", "rating", "content"} <= set(columns)
+
+
 def test_quota_stop_is_graceful_and_resumable(tmp_path):
     col, calls = run_collect(tmp_path, omdb_quota=10)
     tables = pipeline.build_tables(col)

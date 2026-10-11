@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,6 +41,22 @@ INT_COLUMNS = [
     "award_wins", "award_nominations",
 ]  # fmt: skip
 OMDB_WORKERS = 4
+
+# Explicit schemas for the tables that can legitimately be empty (e.g. no reviews yet), so
+# the warehouse always has every table. `movies` is never empty and keeps inferred types.
+SCHEMAS = {
+    "movie_genres": "tmdb_id BIGINT, genre VARCHAR, PRIMARY KEY (tmdb_id, genre)",
+    "movie_keywords": "tmdb_id BIGINT, keyword VARCHAR",
+    "people": "person_id BIGINT PRIMARY KEY, name VARCHAR, gender INTEGER, profile_url VARCHAR",
+    "credits": (
+        "tmdb_id BIGINT, person_id BIGINT, credit_type VARCHAR, department VARCHAR, "
+        "job VARCHAR, character VARCHAR, billing INTEGER"
+    ),
+    "reviews": (
+        "review_id VARCHAR PRIMARY KEY, tmdb_id BIGINT, source VARCHAR, author VARCHAR, "
+        "rating DOUBLE, content VARCHAR, created_at TIMESTAMPTZ, url VARCHAR"
+    ),
+}
 
 
 @dataclass
@@ -200,19 +217,37 @@ def write_outputs(
     tables: dict[str, pd.DataFrame], report: dict[str, Any], out_dir: Path,
     started: datetime,
 ) -> Path:  # fmt: skip
-    """Write the tables to a DuckDB database, plus a Parquet copy of each, and a manifest."""
+    """Write the tables to a DuckDB database, plus a Parquet copy of each, and a manifest.
+
+    The database is built in a temporary file and then swapped in with one rename, so
+    readers never see a half-written warehouse.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     db_path = out_dir / DB_FILENAME
-    with duckdb.connect(str(db_path)) as con:
+    tmp_path = db_path.with_suffix(".building")
+    tmp_path.unlink(missing_ok=True)
+    with duckdb.connect(str(tmp_path)) as con:
         for name, df in tables.items():
-            if df.columns.empty:
-                log.warning("Table %s has no rows or columns; skipping", name)
-                continue
-            con.register("frame", df)
-            con.execute(f"CREATE OR REPLACE TABLE {name} AS SELECT * FROM frame")
-            con.unregister("frame")
+            if name in SCHEMAS:
+                # Fixed schema: the table exists (empty if need be) with stable column types.
+                con.execute(f"CREATE OR REPLACE TABLE {name} ({SCHEMAS[name]})")
+                if not df.empty:
+                    con.register("frame", df)
+                    con.execute(f"INSERT INTO {name} BY NAME SELECT * FROM frame")
+                    con.unregister("frame")
+            else:
+                con.register("frame", df)
+                con.execute(f"CREATE OR REPLACE TABLE {name} AS SELECT * FROM frame")
+                con.unregister("frame")
             parquet = (out_dir / f"{name}.parquet").as_posix().replace("'", "''")
             con.execute(f"COPY {name} TO '{parquet}' (FORMAT parquet)")
+    try:
+        os.replace(tmp_path, db_path)
+    except PermissionError as exc:
+        raise RuntimeError(
+            f"{db_path} is locked by another process (an open database client?). "
+            f"The new database was kept at {tmp_path}; close the other process and re-run."
+        ) from exc
     manifest = {
         "started_at": started.isoformat(),
         "finished_at": datetime.now(UTC).isoformat(),
