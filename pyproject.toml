@@ -1,0 +1,41 @@
+[project]
+name = "imdb-insights"
+version = "2.0.0.dev0"
+description = "IMDb Top 250 data pipeline and AI insights: API ingestion, NLP over reviews, and a RAG assistant."
+readme = "README.md"
+authors = [
+    { name = "Ahmed Abdelmoneim", email = "ahmed.abdellmoneim@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=1.5.6",
+    "httpx>=0.28.1",
+    "pandas>=3.0.6",
+    "plotly>=7.1.0",
+    "pydantic>=2",
+    "pydantic-settings>=2.15.0",
+    "streamlit>=1.65.0",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+imdb-ingest = "imdb_insights.ingest.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.0",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,225 @@
+"""Collect candidates from TMDB, enrich with IMDb ratings from OMDb, rank, and write tables.
+
+Every API response is cached under ``<data_dir>/raw``, so an interrupted run (e.g. the OMDb
+daily quota running out) resumes where it stopped and only fetches what is missing.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import duckdb
+import pandas as pd
+
+from .http import ApiError
+from .omdb import OmdbClient, OmdbError, OmdbMovie
+from .ranking import rank_top
+from .tmdb import TmdbClient, TmdbMovie, image_url
+
+log = logging.getLogger(__name__)
+
+DB_FILENAME = "imdb_insights.duckdb"
+# How far above the candidate floor (in TMDB rating points) the weakest ranked movie must be
+# for us to trust that no Top 250 movie was left out of the pool.
+RATING_MARGIN = 0.2
+
+OMDB_COLUMNS = [
+    "imdb_rating", "imdb_votes", "metascore", "rotten_tomatoes", "box_office_usd", "rated",
+    "awards", "oscar_wins", "oscar_nominations", "award_wins", "award_nominations",
+]  # fmt: skip
+# Nullable integer columns; without this pandas turns them into floats when values are missing.
+INT_COLUMNS = [
+    "year", "runtime_minutes", "budget_usd", "revenue_usd", "tmdb_votes", "imdb_votes",
+    "metascore", "rotten_tomatoes", "box_office_usd", "oscar_wins", "oscar_nominations",
+    "award_wins", "award_nominations",
+]  # fmt: skip
+OMDB_WORKERS = 4
+
+
+@dataclass
+class Collection:
+    candidate_ids: list[int]
+    min_rating: float
+    movies: list[TmdbMovie] = field(default_factory=list)
+    omdb: dict[str, OmdbMovie | None] = field(default_factory=dict)
+    omdb_pending: list[str] = field(default_factory=list)
+    failures: dict[str, str] = field(default_factory=dict)
+    omdb_stopped: str | None = None
+
+
+async def collect(
+    tmdb: TmdbClient, omdb: OmdbClient, *, min_rating: float, min_votes: int, snapshot: str
+) -> Collection:
+    ids = await tmdb.discover_top_rated(
+        min_rating=min_rating, min_votes=min_votes, snapshot=snapshot
+    )
+    log.info("Discovered %d candidate movies", len(ids))
+    result = Collection(candidate_ids=ids, min_rating=min_rating)
+
+    async def one_movie(tmdb_id: int) -> TmdbMovie | None:
+        try:
+            return await tmdb.movie(tmdb_id)
+        except (ApiError, ValueError) as exc:
+            result.failures[f"tmdb:{tmdb_id}"] = str(exc)
+            return None
+
+    result.movies = [m for m in await asyncio.gather(*map(one_movie, ids)) if m]
+    log.info("Fetched TMDB details for %d movies", len(result.movies))
+
+    # A few workers share one queue, so once OMDb refuses (quota or key problems affect every
+    # later request too) at most `OMDB_WORKERS` requests are already in flight.
+    queue = list(dict.fromkeys(m.imdb_id for m in result.movies if m.imdb_id))
+
+    async def rating_worker() -> None:
+        while queue and not result.omdb_stopped:
+            imdb_id = queue.pop(0)
+            try:
+                result.omdb[imdb_id] = await omdb.movie(imdb_id)
+            except OmdbError as exc:
+                result.omdb_stopped = result.omdb_stopped or str(exc)
+                result.omdb_pending.append(imdb_id)
+            except (ApiError, ValueError) as exc:
+                result.failures[f"omdb:{imdb_id}"] = str(exc)
+
+    await asyncio.gather(*(rating_worker() for _ in range(OMDB_WORKERS)))
+    result.omdb_pending += queue
+    log.info("Fetched IMDb ratings for %d movies", len(result.omdb))
+    if result.omdb_stopped:
+        log.warning("OMDb stopped (%s); %d pending", result.omdb_stopped, len(result.omdb_pending))
+    return result
+
+
+def build_tables(col: Collection) -> dict[str, pd.DataFrame]:
+    position = {tmdb_id: i for i, tmdb_id in enumerate(col.candidate_ids, start=1)}
+    movies, genres, keywords, people, credits, reviews = [], [], [], {}, [], []
+
+    for m in col.movies:
+        row: dict[str, Any] = m.model_dump(
+            exclude={
+                "genres",
+                "keywords",
+                "cast",
+                "crew",
+                "reviews",
+                "poster_path",
+                "backdrop_path",
+            }  # fmt: skip
+        )
+        row["year"] = m.release_date.year if m.release_date else None
+        row["poster_url"] = image_url(m.poster_path)
+        row["backdrop_url"] = image_url(m.backdrop_path, "w1280")
+        row["candidate_position"] = position.get(m.tmdb_id)
+
+        rating = col.omdb.get(m.imdb_id) if m.imdb_id else None
+        row |= {c: getattr(rating, c) if rating else None for c in OMDB_COLUMNS}
+        row["omdb_status"] = (
+            "ok" if rating
+            else "no_imdb_id" if not m.imdb_id
+            else "pending" if m.imdb_id in col.omdb_pending
+            else "not_found" if m.imdb_id in col.omdb
+            else "failed"
+        )  # fmt: skip
+        movies.append(row)
+
+        genres += [{"tmdb_id": m.tmdb_id, "genre": g} for g in m.genres]
+        keywords += [{"tmdb_id": m.tmdb_id, "keyword": k} for k in m.keywords]
+        for person in [*m.cast, *m.crew]:
+            people[person.person_id] = {
+                "person_id": person.person_id,
+                "name": person.name,
+                "gender": person.gender,
+                "profile_url": image_url(person.profile_path, "w185"),
+            }
+        credits += [
+            {"tmdb_id": m.tmdb_id, "person_id": c.person_id, "credit_type": "cast",
+             "department": "Acting", "job": "Actor", "character": c.character,
+             "billing": c.billing}
+            for c in m.cast
+        ]  # fmt: skip
+        credits += [
+            {"tmdb_id": m.tmdb_id, "person_id": c.person_id, "credit_type": "crew",
+             "department": c.department, "job": c.job, "character": None, "billing": None}
+            for c in m.crew
+        ]  # fmt: skip
+        reviews += [{"tmdb_id": m.tmdb_id, "source": "tmdb"} | r.model_dump() for r in m.reviews]
+
+    movies_df = pd.DataFrame(movies)
+    movies_df = movies_df.astype(dict.fromkeys(INT_COLUMNS, "Int64"))
+    movies_df = rank_top(movies_df).sort_values("rank", na_position="last")
+
+    return {
+        "movies": movies_df.reset_index(drop=True),
+        "movie_genres": pd.DataFrame(genres),
+        "movie_keywords": pd.DataFrame(keywords),
+        "people": pd.DataFrame(list(people.values())),
+        "credits": pd.DataFrame(credits).astype({"billing": "Int64"}),
+        "reviews": pd.DataFrame(reviews),
+    }
+
+
+def quality_report(col: Collection, tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
+    """Checks that tell us whether the ranking can be trusted."""
+    movies = tables["movies"]
+    ranked = movies[movies["rank"].notna()]
+    lowest = float(ranked["tmdb_rating"].min()) if len(ranked) else None
+    warnings = []
+    if len(ranked) < 250:
+        warnings.append(f"only {len(ranked)} movies are eligible for the ranking")
+    if col.omdb_pending:
+        warnings.append(
+            f"{len(col.omdb_pending)} movies still need IMDb ratings, so the ranking is "
+            "incomplete; re-run after the OMDb quota resets (cached data is reused)"
+        )
+    # Candidates are every movie above min_rating on TMDB. If a ranked movie sits close to
+    # that floor, movies just below it could also belong in the Top 250.
+    if lowest is not None and lowest - col.min_rating < RATING_MARGIN:
+        warnings.append(
+            f"a ranked movie has TMDB rating {lowest:.2f}, within {RATING_MARGIN} of the "
+            f"candidate floor {col.min_rating}; lower --min-rating to be sure none are missed"
+        )
+    return {
+        "candidates": len(col.candidate_ids),
+        "ranked": len(ranked),
+        "complete": not col.omdb_pending and not col.failures,
+        "candidate_min_tmdb_rating": col.min_rating,
+        "lowest_tmdb_rating_in_ranking": lowest,
+        "omdb_status": movies["omdb_status"].value_counts().to_dict(),
+        "omdb_stopped": col.omdb_stopped,
+        "failures": col.failures,
+        "warnings": warnings,
+    }
+
+
+def write_outputs(
+    tables: dict[str, pd.DataFrame], report: dict[str, Any], out_dir: Path,
+    started: datetime,
+) -> Path:  # fmt: skip
+    """Write the tables to a DuckDB database, plus a Parquet copy of each, and a manifest."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    db_path = out_dir / DB_FILENAME
+    with duckdb.connect(str(db_path)) as con:
+        for name, df in tables.items():
+            if df.columns.empty:
+                log.warning("Table %s has no rows or columns; skipping", name)
+                continue
+            con.register("frame", df)
+            con.execute(f"CREATE OR REPLACE TABLE {name} AS SELECT * FROM frame")
+            con.unregister("frame")
+            parquet = (out_dir / f"{name}.parquet").as_posix().replace("'", "''")
+            con.execute(f"COPY {name} TO '{parquet}' (FORMAT parquet)")
+    manifest = {
+        "started_at": started.isoformat(),
+        "finished_at": datetime.now(UTC).isoformat(),
+        "rows": {name: len(df) for name, df in tables.items()},
+        "quality": report,
+        "attribution": "This product uses the TMDB API but is not endorsed or certified by "
+        "TMDB. IMDb ratings via the OMDb API.",
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return db_path

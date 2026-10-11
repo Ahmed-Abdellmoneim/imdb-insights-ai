@@ -1,0 +1,122 @@
+"""End-to-end pipeline tests against fake TMDB and OMDb APIs."""
+
+import asyncio
+
+import duckdb
+import httpx
+
+from imdb_insights.ingest import pipeline
+from imdb_insights.ingest.omdb import OmdbClient
+from imdb_insights.ingest.tmdb import TmdbClient
+
+N_MOVIES = 30
+
+
+def fake_tmdb(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/discover/movie"):
+        ids = [{"id": i} for i in range(1, N_MOVIES + 1)]
+        return httpx.Response(200, json={"total_pages": 1, "results": ids})
+    tmdb_id = int(request.url.path.rsplit("/", 1)[-1])
+    return httpx.Response(
+        200,
+        json={
+            "id": tmdb_id,
+            "title": f"Movie {tmdb_id}",
+            "imdb_id": f"tt{tmdb_id:07d}",
+            "release_date": "2000-01-01",
+            "vote_average": 8.0,
+            "vote_count": 1000,
+            "genres": [{"id": 18, "name": "Drama"}],
+            "credits": {
+                "cast": [{"id": 1, "name": "Star", "character": "Hero", "order": 0}],
+                "crew": [{"id": 2, "name": "Boss", "department": "Directing", "job": "Director"}],
+            },
+            "reviews": {
+                "total_results": 1,
+                "results": [
+                    {"id": f"r{tmdb_id}", "content": "Good.", "author_details": {"rating": 8.0}}
+                ],
+            },
+        },
+    )
+
+
+def omdb_handler(quota: int):
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) > quota:
+            return httpx.Response(
+                401, json={"Response": "False", "Error": "Request limit reached!"}
+            )
+        imdb_id = request.url.params["i"]
+        n = int(imdb_id[2:])
+        return httpx.Response(
+            200,
+            json={
+                "Response": "True",
+                "imdbID": imdb_id,
+                "Title": f"Movie {n}",
+                "imdbRating": f"{7 + n / 10:.1f}" if n <= 25 else "8.0",
+                "imdbVotes": "100,000",
+            },
+        )
+
+    return handler, calls
+
+
+def run_collect(tmp_path, omdb_quota: int):
+    handler, calls = omdb_handler(omdb_quota)
+
+    async def run():
+        async with (
+            TmdbClient("t", tmp_path, transport=httpx.MockTransport(fake_tmdb)) as tmdb,
+            OmdbClient("k", tmp_path, transport=httpx.MockTransport(handler)) as omdb,
+        ):
+            tmdb.http.min_interval = omdb.http.min_interval = 0
+            return await pipeline.collect(tmdb, omdb, min_rating=7.0, min_votes=1, snapshot="today")
+
+    return asyncio.run(run()), calls
+
+
+def test_full_run_builds_ranked_tables(tmp_path):
+    col, _ = run_collect(tmp_path, omdb_quota=1000)
+    tables = pipeline.build_tables(col)
+    report = pipeline.quality_report(col, tables)
+
+    movies = tables["movies"]
+    assert len(movies) == N_MOVIES
+    assert (movies["omdb_status"] == "ok").all()
+    assert movies.iloc[0]["title"] == "Movie 25"  # highest IMDb rating ranks first
+    assert movies["rank"].iloc[0] == 1
+    assert report["complete"] is True
+    assert report["ranked"] == N_MOVIES
+    assert len(tables["credits"]) == 2 * N_MOVIES
+    assert set(tables["credits"]["credit_type"]) == {"cast", "crew"}
+    assert len(tables["people"]) == 2
+
+    db = pipeline.write_outputs(tables, report, tmp_path / "out", started=pipeline.datetime.now())
+    with duckdb.connect(str(db), read_only=True) as con:
+        assert con.sql("select count(*) from movies").fetchone()[0] == N_MOVIES
+        assert con.sql("select count(*) from reviews").fetchone()[0] == N_MOVIES
+    assert (tmp_path / "out" / "movies.parquet").exists()
+
+
+def test_quota_stop_is_graceful_and_resumable(tmp_path):
+    col, calls = run_collect(tmp_path, omdb_quota=10)
+    tables = pipeline.build_tables(col)
+    report = pipeline.quality_report(col, tables)
+
+    assert col.omdb_stopped and "Request limit reached" in col.omdb_stopped
+    assert len(col.omdb) == 10
+    assert len(col.omdb_pending) == N_MOVIES - 10
+    # Only the requests already in flight when the quota ran out may be wasted.
+    assert len(calls) <= 10 + pipeline.OMDB_WORKERS
+    assert report["complete"] is False
+    assert (tables["movies"]["omdb_status"] == "pending").sum() == N_MOVIES - 10
+
+    # Next day: the quota has reset, and only the pending movies are requested.
+    col2, calls2 = run_collect(tmp_path, omdb_quota=1000)
+    assert len(col2.omdb) == N_MOVIES
+    assert len(calls2) == N_MOVIES - 10
