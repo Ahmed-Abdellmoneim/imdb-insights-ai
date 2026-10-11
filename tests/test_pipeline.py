@@ -160,6 +160,27 @@ def test_movies_without_any_rating_are_fetched_first(tmp_path):
     assert len(col.stale) == 10
 
 
+def test_fresh_ratings_are_not_reported_stale_when_quota_is_exhausted(tmp_path):
+    run_collect(tmp_path, omdb_quota=10)  # 10 ratings cached today, 20 never fetched
+    handler, calls = omdb_handler(quota=0)  # quota already gone
+
+    async def run():
+        async with (
+            TmdbClient("t", tmp_path, transport=httpx.MockTransport(fake_tmdb)) as tmdb,
+            OmdbClient(
+                "k", tmp_path, max_age=timedelta(days=14),
+                transport=httpx.MockTransport(handler),
+            ) as omdb,
+        ):  # fmt: skip
+            tmdb.http.min_interval = omdb.http.min_interval = 0
+            return await pipeline.collect(tmdb, omdb, min_rating=7, min_votes=1, snapshot="d2")
+
+    col = asyncio.run(run())
+    assert len(col.omdb) == 10  # the fresh ones, served from cache
+    assert col.stale == []  # ...and not mislabelled as stale
+    assert len(col.omdb_pending) == N_MOVIES - 10
+
+
 def test_rewrite_swaps_in_a_fresh_database(tmp_path):
     col, _ = run_collect(tmp_path, omdb_quota=1000)
     tables = pipeline.build_tables(col)

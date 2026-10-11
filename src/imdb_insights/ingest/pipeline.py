@@ -94,10 +94,18 @@ async def collect(
     result.movies = [m for m in await asyncio.gather(*map(one_movie, ids)) if m]
     log.info("Fetched TMDB details for %d movies", len(result.movies))
 
+    # Ratings that are still fresh in the cache need no request at all.
+    imdb_ids = list(dict.fromkeys(m.imdb_id for m in result.movies if m.imdb_id))
+    queue = []
+    for imdb_id in imdb_ids:
+        if omdb.http.has_fresh(f"omdb/{imdb_id}"):
+            result.omdb[imdb_id] = await omdb.movie(imdb_id)
+        else:
+            queue.append(imdb_id)
+
     # A few workers share one queue, so once OMDb refuses (quota or key problems affect every
     # later request too) at most `OMDB_WORKERS` requests are already in flight. Movies with
     # no cached rating at all go first, so a short quota is spent where it matters most.
-    queue = list(dict.fromkeys(m.imdb_id for m in result.movies if m.imdb_id))
     queue.sort(key=lambda imdb_id: omdb.http.read_cache(f"omdb/{imdb_id}") is not None)
 
     async def rating_worker() -> None:

@@ -90,6 +90,11 @@ class JsonApiClient:
         age = time.time() - file.stat().st_mtime
         return age < self.max_age.total_seconds() * spread
 
+    def has_fresh(self, cache_key: str) -> bool:
+        """Whether ``get_json`` would answer this key from the cache, without the network."""
+        file = self._cache_file(cache_key)
+        return bool(file and file.exists() and self._is_fresh(file, cache_key))
+
     def read_cache(self, cache_key: str) -> Any | None:
         """Return a cached response regardless of its age (a fallback when the API fails)."""
         file = self._cache_file(cache_key)
