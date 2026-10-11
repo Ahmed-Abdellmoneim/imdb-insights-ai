@@ -154,6 +154,7 @@ def _target() -> tuple[Path, str, str]:
 @app.callback()
 def _setup() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per HTTP request is noise
 
 
 @app.command("push")
