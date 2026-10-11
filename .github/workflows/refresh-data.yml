@@ -15,6 +15,8 @@ permissions:
 
 jobs:
   refresh:
+    # Skip (rather than fail nightly) until the Hugging Face dataset is configured.
+    if: vars.HF_DATASET_REPO != ''
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -23,8 +25,8 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ${{ vars.HF_DATASET_REPO }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
       - run: uv sync --locked --no-dev
 
       - name: Restore API cache
