@@ -9,11 +9,13 @@ Secrets passed in ``params`` never reach cache file names; callers choose the ca
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import random
 import time
 from collections.abc import Callable
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -45,9 +47,11 @@ class JsonApiClient:
         min_interval: float = 0.1,
         retries: int = 4,
         timeout: float = 20.0,
+        max_age: timedelta | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.cache_dir = cache_dir
+        self.max_age = max_age
         self.retries = retries
         self.min_interval = min_interval
         self.network_requests = 0
@@ -74,6 +78,25 @@ class JsonApiClient:
             return None
         return self.cache_dir / f"{cache_key}.json"
 
+    def _is_fresh(self, file: Path, cache_key: str) -> bool:
+        """Whether a cached entry is young enough to reuse.
+
+        Each key's limit is spread between 75% and 125% of ``max_age`` (stable per key), so
+        entries written on the same day do not all expire on the same day.
+        """
+        if self.max_age is None:
+            return True
+        spread = 0.75 + 0.5 * (int(hashlib.sha1(cache_key.encode()).hexdigest(), 16) % 1000) / 1000
+        age = time.time() - file.stat().st_mtime
+        return age < self.max_age.total_seconds() * spread
+
+    def read_cache(self, cache_key: str) -> Any | None:
+        """Return a cached response regardless of its age (a fallback when the API fails)."""
+        file = self._cache_file(cache_key)
+        if file and file.exists():
+            return json.loads(file.read_text(encoding="utf-8"))
+        return None
+
     async def get_json(
         self,
         path: str,
@@ -88,7 +111,7 @@ class JsonApiClient:
         report errors inside a 200 response use it to keep those out of the cache.
         """
         cache_file = self._cache_file(cache_key)
-        if cache_file and cache_file.exists():
+        if cache_file and cache_file.exists() and self._is_fresh(cache_file, cache_key):
             return json.loads(cache_file.read_text(encoding="utf-8"))
 
         data = await self._fetch(path, params)

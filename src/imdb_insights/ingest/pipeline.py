@@ -68,6 +68,8 @@ class Collection:
     omdb_pending: list[str] = field(default_factory=list)
     failures: dict[str, str] = field(default_factory=dict)
     omdb_stopped: str | None = None
+    # Entries served from an expired cache because a refresh was not possible this run.
+    stale: list[str] = field(default_factory=list)
 
 
 async def collect(
@@ -83,6 +85,9 @@ async def collect(
         try:
             return await tmdb.movie(tmdb_id)
         except (ApiError, ValueError) as exc:
+            if stale := tmdb.cached_movie(tmdb_id):
+                result.stale.append(f"tmdb:{tmdb_id}")
+                return stale
             result.failures[f"tmdb:{tmdb_id}"] = str(exc)
             return None
 
@@ -90,8 +95,10 @@ async def collect(
     log.info("Fetched TMDB details for %d movies", len(result.movies))
 
     # A few workers share one queue, so once OMDb refuses (quota or key problems affect every
-    # later request too) at most `OMDB_WORKERS` requests are already in flight.
+    # later request too) at most `OMDB_WORKERS` requests are already in flight. Movies with
+    # no cached rating at all go first, so a short quota is spent where it matters most.
     queue = list(dict.fromkeys(m.imdb_id for m in result.movies if m.imdb_id))
+    queue.sort(key=lambda imdb_id: omdb.http.read_cache(f"omdb/{imdb_id}") is not None)
 
     async def rating_worker() -> None:
         while queue and not result.omdb_stopped:
@@ -106,6 +113,16 @@ async def collect(
 
     await asyncio.gather(*(rating_worker() for _ in range(OMDB_WORKERS)))
     result.omdb_pending += queue
+
+    # Ratings we could not refresh this run fall back to the last known value.
+    still_pending = []
+    for imdb_id in result.omdb_pending:
+        if stale := omdb.cached_movie(imdb_id):
+            result.omdb[imdb_id] = stale
+            result.stale.append(f"omdb:{imdb_id}")
+        else:
+            still_pending.append(imdb_id)
+    result.omdb_pending = still_pending
     log.info("Fetched IMDb ratings for %d movies", len(result.omdb))
     if result.omdb_stopped:
         log.warning("OMDb stopped (%s); %d pending", result.omdb_stopped, len(result.omdb_pending))
@@ -208,6 +225,7 @@ def quality_report(col: Collection, tables: dict[str, pd.DataFrame]) -> dict[str
         "lowest_tmdb_rating_in_ranking": lowest,
         "omdb_status": movies["omdb_status"].value_counts().to_dict(),
         "omdb_stopped": col.omdb_stopped,
+        "stale_entries": len(col.stale),
         "failures": col.failures,
         "warnings": warnings,
     }

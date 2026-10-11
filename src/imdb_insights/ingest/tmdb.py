@@ -10,7 +10,7 @@ This product uses the TMDB API but is not endorsed or certified by TMDB.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -171,6 +171,7 @@ class TmdbClient:
         token: str,
         cache_dir: Path | None,
         *,
+        max_age: timedelta | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.http = JsonApiClient(
@@ -180,6 +181,7 @@ class TmdbClient:
             params={"language": "en-US"},
             max_concurrency=8,
             min_interval=0.03,
+            max_age=max_age,
             transport=transport,
         )
 
@@ -232,3 +234,8 @@ class TmdbClient:
             cache_key=f"tmdb/movie/{tmdb_id}",
         )
         return parse_movie(data)
+
+    def cached_movie(self, tmdb_id: int) -> TmdbMovie | None:
+        """The last successful response for ``tmdb_id``, however old, or ``None``."""
+        data = self.http.read_cache(f"tmdb/movie/{tmdb_id}")
+        return parse_movie(data) if data else None

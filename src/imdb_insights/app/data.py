@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +13,11 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from .. import publish
 from ..config import get_settings
 from ..ingest.pipeline import DB_FILENAME
+
+log = logging.getLogger(__name__)
 
 # Directors and top-billed cast, used by several pages.
 GENRES_CTE = """
@@ -36,6 +41,35 @@ def processed_dir() -> Path:
 
 def database_exists() -> bool:
     return (processed_dir() / DB_FILENAME).exists()
+
+
+@st.cache_resource(ttl=timedelta(hours=1), show_spinner="Fetching the latest data…")
+def sync_from_hub() -> str | None:
+    """Download the published warehouse when configured (deployments); at most hourly.
+
+    Returns the published run's finish time. Failures keep whatever data is already here.
+    """
+    settings = get_settings()
+    if not settings.hf_dataset_repo or not settings.hf_token:
+        return None  # local development: use the locally built warehouse
+    before = manifest_finished_at()
+    try:
+        publish.pull_warehouse(
+            settings.data_dir, settings.hf_dataset_repo, settings.hf_token.get_secret_value()
+        )
+    except Exception:  # noqa: BLE001 - a failed refresh must never take the app down
+        log.exception("Could not fetch the published warehouse; keeping the current data")
+    after = manifest_finished_at()
+    if after != before:
+        st.cache_data.clear()  # new data: drop cached query results
+    return after
+
+
+def manifest_finished_at() -> str | None:
+    path = processed_dir() / "manifest.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8")).get("finished_at")
 
 
 def query(sql: str, params: list[Any] | None = None) -> pd.DataFrame:

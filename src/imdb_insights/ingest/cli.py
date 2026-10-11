@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -13,7 +14,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
 
-from ..config import get_settings
+from ..config import Settings, get_settings
 from . import pipeline
 from .omdb import OmdbClient
 from .tmdb import TmdbClient
@@ -22,10 +23,24 @@ app = typer.Typer(add_completion=False)
 console = Console()
 
 
+@dataclass(frozen=True)
+class Options:
+    min_rating: float
+    min_votes: int
+    tmdb_max_age: timedelta
+    omdb_max_age: timedelta
+
+
 @app.command()
 def ingest(
     min_rating: Annotated[float, typer.Option(help="Minimum TMDB rating for a candidate.")] = 7.3,
     min_votes: Annotated[int, typer.Option(help="Minimum TMDB votes for a candidate.")] = 600,
+    tmdb_max_age_days: Annotated[
+        float, typer.Option(help="Re-fetch TMDB details older than this (on average).")
+    ] = 7,
+    omdb_max_age_days: Annotated[
+        float, typer.Option(help="Re-fetch IMDb ratings older than this (on average).")
+    ] = 14,
     data_dir: Annotated[Path | None, typer.Option(help="Defaults to DATA_DIR or ./data.")] = None,
 ) -> None:
     """Build the movie tables and our own IMDb-style Top 250."""
@@ -39,7 +54,13 @@ def ingest(
 
     data_dir = data_dir or settings.data_dir
     started = datetime.now(UTC)
-    tables, report = asyncio.run(_run(settings, data_dir, min_rating, min_votes, started))
+    options = Options(
+        min_rating=min_rating,
+        min_votes=min_votes,
+        tmdb_max_age=timedelta(days=tmdb_max_age_days),
+        omdb_max_age=timedelta(days=omdb_max_age_days),
+    )
+    tables, report = asyncio.run(_run(settings, data_dir, options, started))
 
     out_dir = data_dir / "processed"
     db_path = pipeline.write_outputs(tables, report, out_dir, started)
@@ -50,6 +71,8 @@ def ingest(
     for name, df in tables.items():
         summary.add_row(name, f"{len(df):,}")
     console.print(summary)
+    if report["stale_entries"]:
+        console.print(f"{report['stale_entries']} entries could not be refreshed; kept older data")
     for warning in report["warnings"]:
         console.print(f"[yellow]warning:[/yellow] {warning}")
     if not report["complete"]:
@@ -57,17 +80,21 @@ def ingest(
         raise typer.Exit(code=3)
 
 
-async def _run(settings, data_dir: Path, min_rating: float, min_votes: int, started: datetime):
+async def _run(settings: Settings, data_dir: Path, options: Options, started: datetime):
     raw = data_dir / "raw"
     async with (
-        TmdbClient(settings.tmdb_api_key.get_secret_value(), raw) as tmdb,
-        OmdbClient(settings.omdb_api_key.get_secret_value(), raw) as omdb,
+        TmdbClient(
+            settings.tmdb_api_key.get_secret_value(), raw, max_age=options.tmdb_max_age
+        ) as tmdb,
+        OmdbClient(
+            settings.omdb_api_key.get_secret_value(), raw, max_age=options.omdb_max_age
+        ) as omdb,
     ):
         col = await pipeline.collect(
             tmdb,
             omdb,
-            min_rating=min_rating,
-            min_votes=min_votes,
+            min_rating=options.min_rating,
+            min_votes=options.min_votes,
             snapshot=started.date().isoformat(),
         )
         console.print(

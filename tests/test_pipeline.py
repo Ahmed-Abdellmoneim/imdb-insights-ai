@@ -1,6 +1,9 @@
 """End-to-end pipeline tests against fake TMDB and OMDb APIs."""
 
 import asyncio
+import os
+import time
+from datetime import timedelta
 
 import duckdb
 import httpx
@@ -101,6 +104,60 @@ def test_full_run_builds_ranked_tables(tmp_path):
         assert con.sql("select count(*) from movies").fetchone()[0] == N_MOVIES
         assert con.sql("select count(*) from reviews").fetchone()[0] == N_MOVIES
     assert (tmp_path / "out" / "movies.parquet").exists()
+
+
+def test_expired_ratings_fall_back_to_cache_when_quota_runs_out(tmp_path):
+    run_collect(tmp_path, omdb_quota=1000)  # day 1: everything cached
+    old = time.time() - 60 * 86400
+    for f in (tmp_path / "omdb").glob("*.json"):
+        os.utime(f, (old, old))
+
+    handler, calls = omdb_handler(quota=5)
+
+    async def run():
+        async with (
+            TmdbClient("t", tmp_path, transport=httpx.MockTransport(fake_tmdb)) as tmdb,
+            OmdbClient(
+                "k", tmp_path, max_age=timedelta(days=14),
+                transport=httpx.MockTransport(handler),
+            ) as omdb,
+        ):  # fmt: skip
+            tmdb.http.min_interval = omdb.http.min_interval = 0
+            return await pipeline.collect(tmdb, omdb, min_rating=7, min_votes=1, snapshot="d2")
+
+    col = asyncio.run(run())
+    assert len(col.omdb) == N_MOVIES  # every movie still has a rating
+    assert not col.omdb_pending
+    assert len(col.stale) == N_MOVIES - 5
+    report = pipeline.quality_report(col, pipeline.build_tables(col))
+    assert report["complete"] is True
+    assert report["stale_entries"] == N_MOVIES - 5
+
+
+def test_movies_without_any_rating_are_fetched_first(tmp_path):
+    run_collect(tmp_path, omdb_quota=10)  # day 1: 10 cached, 20 never fetched
+    old = time.time() - 60 * 86400
+    for f in (tmp_path / "omdb").glob("*.json"):
+        os.utime(f, (old, old))  # the cached 10 are also due for a refresh
+
+    handler, calls = omdb_handler(quota=20)
+
+    async def run():
+        async with (
+            TmdbClient("t", tmp_path, transport=httpx.MockTransport(fake_tmdb)) as tmdb,
+            OmdbClient(
+                "k", tmp_path, max_age=timedelta(days=14),
+                transport=httpx.MockTransport(handler),
+            ) as omdb,
+        ):  # fmt: skip
+            tmdb.http.min_interval = omdb.http.min_interval = 0
+            return await pipeline.collect(tmdb, omdb, min_rating=7, min_votes=1, snapshot="d2")
+
+    col = asyncio.run(run())
+    # The 20-request quota went to the 20 movies that had nothing; the rest kept old data.
+    assert len(col.omdb) == N_MOVIES
+    assert not col.omdb_pending
+    assert len(col.stale) == 10
 
 
 def test_rewrite_swaps_in_a_fresh_database(tmp_path):

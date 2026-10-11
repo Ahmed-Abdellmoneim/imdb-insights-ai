@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Iterable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -141,6 +141,7 @@ class OmdbClient:
         api_key: str,
         cache_dir: Path | None,
         *,
+        max_age: timedelta | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.http = JsonApiClient(
@@ -149,6 +150,7 @@ class OmdbClient:
             params={"apikey": api_key},
             max_concurrency=4,
             min_interval=0.15,
+            max_age=max_age,
             transport=transport,
         )
 
@@ -172,6 +174,11 @@ class OmdbClient:
                 raise OmdbError(f"OMDb error: {exc.body['Error']}", exc.status, exc.body) from exc
             raise
         return parse_omdb(data)
+
+    def cached_movie(self, imdb_id: str) -> OmdbMovie | None:
+        """The last successful response for ``imdb_id``, however old, or ``None``."""
+        data = self.http.read_cache(f"omdb/{imdb_id}")
+        return parse_omdb(data) if data else None
 
     async def movies(self, imdb_ids: Iterable[str]) -> dict[str, OmdbMovie | None]:
         """Fetch several movies concurrently; raises the first error encountered."""

@@ -10,6 +10,7 @@ from . import data, pages
 def main() -> None:
     st.set_page_config(page_title="IMDb Insights", page_icon=":material/movie:", layout="wide")
 
+    data.sync_from_hub()
     if not data.database_exists():
         st.error(
             "No data yet. Build the warehouse first:\n\n`uv run python -m imdb_insights.ingest`",

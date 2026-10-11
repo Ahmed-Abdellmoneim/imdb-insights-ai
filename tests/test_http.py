@@ -1,4 +1,7 @@
 import asyncio
+import os
+import time
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -77,6 +80,45 @@ def test_cache_hit_skips_network(tmp_path):
     second = asyncio.run(_get(make_client(handler, tmp_path), "/x", cache_key="a/b"))
     assert first == second == {"n": 1}
     assert (tmp_path / "a" / "b.json").exists()
+
+
+def _age(file, days):
+    then = time.time() - days * 86400
+    os.utime(file, (then, then))
+
+
+def test_expired_entries_are_refetched_but_still_readable(tmp_path):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"n": len(calls)})
+
+    asyncio.run(_get(make_client(handler, tmp_path), "/x", cache_key="k"))
+    _age(tmp_path / "k.json", days=30)
+
+    fresh_enough = make_client(handler, tmp_path, max_age=timedelta(days=60))
+    assert asyncio.run(_get(fresh_enough, "/x", cache_key="k")) == {"n": 1}
+    expired = make_client(handler, tmp_path, max_age=timedelta(days=7))
+    assert expired.read_cache("k") == {"n": 1}  # stale copy available as a fallback
+    assert asyncio.run(_get(expired, "/x", cache_key="k")) == {"n": 2}
+    assert len(calls) == 2
+
+
+def test_expiry_is_spread_between_75_and_125_percent_of_max_age(tmp_path):
+    client = make_client(lambda r: httpx.Response(200, json={}), tmp_path, max_age=timedelta(1))
+    file = tmp_path / "f.json"
+    file.write_text("{}", encoding="utf-8")
+
+    def fresh_at(hours_old, key):
+        _age(file, days=hours_old / 24)
+        return client._is_fresh(file, key)
+
+    keys = [f"key{i}" for i in range(200)]
+    assert all(fresh_at(17, k) for k in keys)  # younger than 75% of a day: always fresh
+    assert not any(fresh_at(31, k) for k in keys)  # older than 125%: always expired
+    in_between = [fresh_at(24, k) for k in keys]
+    assert any(in_between) and not all(in_between)  # spread, not one cliff
 
 
 def test_uncacheable_responses_are_not_stored(tmp_path):

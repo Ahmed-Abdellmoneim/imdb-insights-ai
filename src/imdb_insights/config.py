@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     omdb_api_key: SecretStr | None = None
     tmdb_api_key: SecretStr | None = None
     data_dir: Path = Path("data")
+    # Private Hugging Face dataset that stores the published warehouse and the API cache.
+    hf_dataset_repo: str | None = None
+    hf_token: SecretStr | None = None
 
 
 @lru_cache
