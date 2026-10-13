@@ -18,8 +18,13 @@ class Settings(BaseSettings):
     # Private Hugging Face dataset that stores the published warehouse and the API cache.
     hf_dataset_repo: str | None = None
     hf_token: SecretStr | None = None
+    # Claude API, for the zero-shot review rating baseline (step 3).
+    anthropic_api_key: SecretStr | None = None
 
-    @field_validator("omdb_api_key", "tmdb_api_key", "hf_token", "hf_dataset_repo", mode="before")
+    @field_validator(
+        "omdb_api_key", "tmdb_api_key", "hf_token", "hf_dataset_repo", "anthropic_api_key",
+        mode="before",
+    )  # fmt: skip
     @classmethod
     def _clean(cls, value: object) -> object:
         """Drop the whitespace and byte-order marks that copy-pasting often adds.

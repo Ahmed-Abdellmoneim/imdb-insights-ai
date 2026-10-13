@@ -104,6 +104,12 @@ def train(
     typer.echo(json.dumps(info, indent=2))
 
 
+def _claude(anthropic):
+    """A client using ANTHROPIC_API_KEY from .env if set, else the SDK's own lookup."""
+    key = get_settings().anthropic_api_key
+    return anthropic.Anthropic(api_key=key.get_secret_value()) if key else anthropic.Anthropic()
+
+
 @app.command("llm-submit")
 def llm_submit(
     yes: Annotated[bool, typer.Option("--yes", help="Submit without the cost prompt.")] = False,
@@ -122,7 +128,7 @@ def llm_submit(
         raise typer.Exit(code=1)
     path = llm.sample_path(get_settings().data_dir)
     sample[["review_id"]].to_parquet(path, index=False)
-    batch_id = llm.submit(anthropic.Anthropic(), sample)
+    batch_id = llm.submit(_claude(anthropic), sample)
     (path.parent / "llm_batch.json").write_text(json.dumps({"batch_id": batch_id}), "utf-8")
     typer.echo(f"Submitted batch {batch_id}; run `llm-collect` once it has ended (usually < 1h).")
 
@@ -137,7 +143,7 @@ def llm_collect() -> None:
     _, pred_dir = _paths()
     meta = get_settings().data_dir / "reviews" / "llm_batch.json"
     batch_id = json.loads(meta.read_text(encoding="utf-8"))["batch_id"]
-    collected = llm.collect(anthropic.Anthropic(), batch_id)
+    collected = llm.collect(_claude(anthropic), batch_id)
     if collected is None:
         typer.echo(f"Batch {batch_id} is still running; try again later.")
         raise typer.Exit(code=3)
