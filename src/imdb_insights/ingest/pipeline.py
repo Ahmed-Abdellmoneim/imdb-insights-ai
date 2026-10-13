@@ -67,6 +67,8 @@ class Collection:
     candidate_ids: list[int]
     min_rating: float
     min_votes: int
+    # Human-readable description of each candidate query, for the manifest and the app.
+    pools: list[str] = field(default_factory=list)
     movies: list[TmdbMovie] = field(default_factory=list)
     omdb: dict[str, OmdbMovie | None] = field(default_factory=dict)
     omdb_pending: list[str] = field(default_factory=list)
@@ -76,14 +78,50 @@ class Collection:
     stale: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class LowVoteTier:
+    """Extra candidates with few TMDB votes (``min_votes`` up to the main floor).
+
+    Some films with hundreds of thousands of IMDb votes have only a few hundred on TMDB
+    (e.g. Indian cinema), so a single TMDB vote floor would silently miss them.
+    """
+
+    min_rating: float
+    min_votes: int
+
+
 async def collect(
-    tmdb: TmdbClient, omdb: OmdbClient, *, min_rating: float, min_votes: int, snapshot: str
+    tmdb: TmdbClient,
+    omdb: OmdbClient,
+    *,
+    min_rating: float,
+    min_votes: int,
+    snapshot: str,
+    low_votes: LowVoteTier | None = None,
 ) -> Collection:
     ids = await tmdb.discover_top_rated(
         min_rating=min_rating, min_votes=min_votes, snapshot=snapshot
     )
+    floor_rating, floor_votes = min_rating, min_votes
+    pools = [f"rated {min_rating}+ with {min_votes:,}+ TMDB votes"]
+    if low_votes and low_votes.min_votes < min_votes:
+        ids += await tmdb.discover_top_rated(
+            min_rating=low_votes.min_rating,
+            min_votes=low_votes.min_votes,
+            max_votes=min_votes - 1,
+            snapshot=snapshot,
+        )
+        ids = list(dict.fromkeys(ids))
+        floor_rating = min(min_rating, low_votes.min_rating)
+        floor_votes = low_votes.min_votes
+        pools.append(
+            f"rated {low_votes.min_rating}+ with {low_votes.min_votes:,}–{min_votes - 1:,} "
+            "TMDB votes"
+        )
     log.info("Discovered %d candidate movies", len(ids))
-    result = Collection(candidate_ids=ids, min_rating=min_rating, min_votes=min_votes)
+    result = Collection(
+        candidate_ids=ids, min_rating=floor_rating, min_votes=floor_votes, pools=pools
+    )
 
     async def one_movie(tmdb_id: int) -> TmdbMovie | None:
         try:
@@ -108,9 +146,16 @@ async def collect(
             queue.append(imdb_id)
 
     # A few workers share one queue, so once OMDb refuses (quota or key problems affect every
-    # later request too) at most `OMDB_WORKERS` requests are already in flight. Movies with
-    # no cached rating at all go first, so a short quota is spent where it matters most.
-    queue.sort(key=lambda imdb_id: omdb.http.read_cache(f"omdb/{imdb_id}") is not None)
+    # later request too) at most `OMDB_WORKERS` requests are already in flight. A short quota
+    # goes where it matters most: movies with no rating at all first, best TMDB-rated first
+    # (the likeliest to enter the ranking), then refreshes of expired ratings.
+    tmdb_rating = {m.imdb_id: m.tmdb_rating or 0 for m in result.movies}
+    queue.sort(
+        key=lambda imdb_id: (
+            omdb.http.read_cache(f"omdb/{imdb_id}") is not None,
+            -tmdb_rating.get(imdb_id, 0),
+        )
+    )
 
     async def rating_worker() -> None:
         while queue and not result.omdb_stopped:
@@ -240,6 +285,7 @@ def quality_report(col: Collection, tables: dict[str, pd.DataFrame]) -> dict[str
         "candidates": len(col.candidate_ids),
         "ranked": len(ranked),
         "complete": not col.omdb_pending and not col.failures,
+        "candidate_pools": col.pools,
         "candidate_min_tmdb_rating": col.min_rating,
         "candidate_min_tmdb_votes": col.min_votes,
         "lowest_tmdb_rating_in_ranking": lowest,

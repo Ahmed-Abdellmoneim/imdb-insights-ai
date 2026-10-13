@@ -196,11 +196,12 @@ class TmdbClient:
         *,
         min_rating: float,
         min_votes: int,
+        max_votes: int | None = None,
         max_pages: int = 500,
         exclude_genres: Iterable[int] = (DOCUMENTARY, TV_MOVIE),
         snapshot: str | None = None,
     ) -> list[int]:
-        """Return TMDB ids of every movie at or above both thresholds, best rated first.
+        """Return TMDB ids of every movie within the thresholds, best rated first.
 
         ``snapshot`` (e.g. today's date) namespaces the cache, since rankings drift.
         TMDB serves at most 500 pages of 20 results.
@@ -213,8 +214,10 @@ class TmdbClient:
             "include_adult": "false",
             "include_video": "false",
         }
+        if max_votes is not None:
+            params["vote_count.lte"] = max_votes
         excluded = "_".join(map(str, exclude_genres))  # no "|": it is invalid in Windows paths
-        query = f"rating{min_rating}-votes{min_votes}-without{excluded}"
+        query = f"rating{min_rating}-votes{min_votes}-{max_votes or ''}-without{excluded}"
         ids: list[int] = []
         for page in range(1, max_pages + 1):
             data = await self.http.get_json(

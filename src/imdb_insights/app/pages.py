@@ -342,11 +342,10 @@ def about_page() -> None:
     quality = manifest.get("quality", {})
     completeness_banner()
 
-    min_rating = quality.get("candidate_min_tmdb_rating")
-    min_votes = quality.get("candidate_min_tmdb_votes")
+    pools = quality.get("candidate_pools") or []
     pool = (
-        f"Every TMDB movie rated {min_rating}+ with {min_votes:,}+ votes is a candidate"
-        if min_rating is not None and min_votes is not None
+        "Every TMDB movie " + ", plus every movie ".join(pools) + " is a candidate"
+        if pools
         else "The best-rated TMDB movies are candidates"
     )
     st.markdown(

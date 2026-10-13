@@ -181,6 +181,41 @@ def test_fresh_ratings_are_not_reported_stale_when_quota_is_exhausted(tmp_path):
     assert len(col.omdb_pending) == N_MOVIES - 10
 
 
+def test_low_vote_tier_adds_candidates_and_lowers_the_reported_floors(tmp_path):
+    queries = []
+
+    def tmdb(request):
+        if request.url.path.endswith("/discover/movie"):
+            queries.append(dict(request.url.params))
+            low = "vote_count.lte" in request.url.params
+            ids = [{"id": 100 + i} for i in range(3)] if low else [{"id": 1}, {"id": 2}]
+            return httpx.Response(200, json={"total_pages": 1, "results": ids})
+        return fake_tmdb(request)
+
+    handler, _ = omdb_handler(quota=1000)
+
+    async def run():
+        async with (
+            TmdbClient("t", tmp_path, transport=httpx.MockTransport(tmdb)) as t,
+            OmdbClient("k", tmp_path, transport=httpx.MockTransport(handler)) as o,
+        ):
+            t.http.min_interval = o.http.min_interval = 0
+            return await pipeline.collect(
+                t, o, min_rating=6.9, min_votes=250, snapshot="d",
+                low_votes=pipeline.LowVoteTier(min_rating=7.0, min_votes=50),
+            )  # fmt: skip
+
+    col = asyncio.run(run())
+    assert col.candidate_ids == [1, 2, 100, 101, 102]
+    low = next(q for q in queries if "vote_count.lte" in q)
+    assert (low["vote_average.gte"], low["vote_count.gte"], low["vote_count.lte"]) == (
+        "7.0",
+        "50",
+        "249",
+    )
+    assert (col.min_rating, col.min_votes) == (6.9, 50)
+
+
 def test_rewrite_swaps_in_a_fresh_database(tmp_path):
     col, _ = run_collect(tmp_path, omdb_quota=1000)
     tables = pipeline.build_tables(col)

@@ -27,6 +27,7 @@ console = Console()
 class Options:
     min_rating: float
     min_votes: int
+    low_votes: pipeline.LowVoteTier
     tmdb_max_age: timedelta
     omdb_max_age: timedelta
 
@@ -35,12 +36,18 @@ class Options:
 def ingest(
     min_rating: Annotated[float, typer.Option(help="Minimum TMDB rating for a candidate.")] = 6.9,
     min_votes: Annotated[int, typer.Option(help="Minimum TMDB votes for a candidate.")] = 250,
+    low_vote_min_rating: Annotated[
+        float, typer.Option(help="Minimum TMDB rating for low-vote candidates.")
+    ] = 7.0,
+    low_vote_min_votes: Annotated[
+        int, typer.Option(help="Low-vote candidates: TMDB votes from this up to --min-votes.")
+    ] = 50,
     tmdb_max_age_days: Annotated[
         float, typer.Option(help="Re-fetch TMDB details older than this (on average).")
     ] = 7,
     omdb_max_age_days: Annotated[
         float, typer.Option(help="Re-fetch IMDb ratings older than this (on average).")
-    ] = 14,
+    ] = 21,
     data_dir: Annotated[Path | None, typer.Option(help="Defaults to DATA_DIR or ./data.")] = None,
 ) -> None:
     """Build the movie tables and our own IMDb-style Top 250."""
@@ -57,6 +64,7 @@ def ingest(
     options = Options(
         min_rating=min_rating,
         min_votes=min_votes,
+        low_votes=pipeline.LowVoteTier(low_vote_min_rating, low_vote_min_votes),
         tmdb_max_age=timedelta(days=tmdb_max_age_days),
         omdb_max_age=timedelta(days=omdb_max_age_days),
     )
@@ -95,6 +103,7 @@ async def _run(settings: Settings, data_dir: Path, options: Options, started: da
             omdb,
             min_rating=options.min_rating,
             min_votes=options.min_votes,
+            low_votes=options.low_votes,
             snapshot=started.date().isoformat(),
         )
         console.print(

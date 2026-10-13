@@ -11,7 +11,7 @@ ourselves, and (in progress) NLP over reviews and an AI assistant.
 ## What it does today
 
 ```
-TMDB discover ──► candidates (rating ≥ 6.9, ≥ 250 votes)
+TMDB discover ──► candidates (rating ≥ 6.9 with ≥ 250 votes, plus ≥ 7.0 with 50–249 votes)
       │
       ├─► TMDB /movie/{id}  details · cast & crew · keywords · reviews · IMDb id
       └─► OMDb ?i={imdb_id} IMDb rating & votes · Metascore · Rotten Tomatoes · awards
@@ -80,7 +80,7 @@ GitHub Actions (daily) ──► pull API cache ◄── private Hugging Face d
 - **Private data, public code.** TMDB data may not be redistributed in bulk, so the warehouse
   lives in a private Hugging Face dataset; `publish` refuses to write to a public one and
   squashes history on every push so storage stays flat.
-- **Incremental.** Cached responses expire after ~7 days (TMDB) and ~14 days (OMDb), spread
+- **Incremental.** Cached responses expire after ~7 days (TMDB) and ~21 days (OMDb), spread
   per key so refreshes are distributed across days and stay inside OMDb's daily quota.
   Movies with no rating at all are fetched first; if a refresh fails, the last known value
   is kept and counted in the manifest.
