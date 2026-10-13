@@ -22,7 +22,7 @@ class RatingModel(Protocol):
         """Predicted ratings on the 1-10 scale (not necessarily integers)."""
 
 
-def get_model(name: str) -> RatingModel:
+def get_model(name: str, **options) -> RatingModel:
     if name == "tfidf":
         from .tfidf import TfidfRidge
 
@@ -34,5 +34,5 @@ def get_model(name: str) -> RatingModel:
     if name == "finetune":
         from .finetune import FineTunedRegressor
 
-        return FineTunedRegressor()
+        return FineTunedRegressor(**options)
     raise ValueError(f"Unknown model {name!r}; choose tfidf, embeddings or finetune")

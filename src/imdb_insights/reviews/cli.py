@@ -81,13 +81,18 @@ def prepare() -> None:
 @app.command()
 def train(
     model_name: Annotated[str, typer.Argument(help="tfidf, embeddings or finetune")],
+    base_model: Annotated[
+        str | None,
+        typer.Option(help="finetune only: Hugging Face id or local folder of the base model."),
+    ] = None,
 ) -> None:
     """Fit a model on train (tuned on validation) and save its predictions."""
     from .models import get_model
 
     splits_path, pred_dir = _paths()
     splits = pd.read_parquet(splits_path)
-    model = get_model(model_name)
+    options = {"base_model": base_model} if model_name == "finetune" and base_model else {}
+    model = get_model(model_name, **options)
     if model_name == "finetune":
         model.output_dir = get_settings().data_dir / "reviews" / "models" / "finetune"
     info = model.fit(splits[splits["split"] == "train"], splits[splits["split"] == "validation"])

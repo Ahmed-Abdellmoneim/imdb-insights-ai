@@ -127,7 +127,7 @@ class FineTunedRegressor:
             self.model.save_pretrained(self.output_dir)
             self.tokenizer.save_pretrained(self.output_dir)
         return {
-            "base_model": self.base_model,
+            "base_model": Path(self.base_model).name,  # a hub id, or a local copy's folder
             "epochs": self.epochs,
             "lr": self.lr,
             "effective_batch": self.batch_size * self.accumulate,
