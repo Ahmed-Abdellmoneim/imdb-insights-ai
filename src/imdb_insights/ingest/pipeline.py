@@ -43,6 +43,12 @@ INT_COLUMNS = [
     "metascore", "rotten_tomatoes", "box_office_usd", "oscar_wins", "oscar_nominations",
     "award_wins", "award_nominations",
 ]  # fmt: skip
+# Text columns, typed explicitly: a column that happens to be all-NULL would otherwise be
+# stored as INTEGER and break string functions downstream.
+STRING_COLUMNS = [
+    "imdb_id", "title", "original_title", "original_language", "overview", "tagline",
+    "collection", "poster_url", "backdrop_url", "rated", "awards", "omdb_status",
+]  # fmt: skip
 OMDB_WORKERS = 4
 
 # Explicit schemas for the tables that can legitimately be empty (e.g. no reviews yet), so
@@ -241,7 +247,9 @@ def build_tables(col: Collection) -> dict[str, pd.DataFrame]:
         reviews += [{"tmdb_id": m.tmdb_id, "source": "tmdb"} | r.model_dump() for r in m.reviews]
 
     movies_df = pd.DataFrame(movies)
-    movies_df = movies_df.astype(dict.fromkeys(INT_COLUMNS, "Int64"))
+    movies_df = movies_df.astype(
+        dict.fromkeys(INT_COLUMNS, "Int64") | dict.fromkeys(STRING_COLUMNS, "string")
+    )
     movies_df = rank_top(movies_df).sort_values("rank", na_position="last")
 
     return {

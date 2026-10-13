@@ -29,6 +29,8 @@ log = logging.getLogger(__name__)
 REPO_TYPE = "dataset"
 MANIFEST = "manifest.json"
 CACHE_ARCHIVE = "raw-cache.tar.gz"
+# Records which dataset commit the local warehouse came from, to skip unchanged downloads.
+REVISION_MARKER = ".hf-revision"
 WAREHOUSE_FILES = (DB_FILENAME, MANIFEST)
 # Discover results are dated snapshots that are only reused on the same day.
 CACHE_EXCLUDE = ("tmdb/discover",)
@@ -98,15 +100,29 @@ def push(data_dir: Path, repo_id: str, token: str) -> None:
     log.info("Published %s to %s", ", ".join(WAREHOUSE_FILES), repo_id)
 
 
-def _download(repo_id: str, token: str, filename: str, target_dir: Path) -> Path | None:
+def _download(
+    repo_id: str, token: str, filename: str, target_dir: Path, revision: str | None = None
+) -> Path | None:
     """Download one file into ``target_dir``; ``None`` if the dataset or file is absent."""
     try:
         return Path(
             hf_hub_download(
-                repo_id, filename, repo_type=REPO_TYPE, token=token, local_dir=target_dir
+                repo_id,
+                filename,
+                repo_type=REPO_TYPE,
+                token=token,
+                local_dir=target_dir,
+                revision=revision,
             )
         )
     except (RepositoryNotFoundError, EntryNotFoundError):
+        return None
+
+
+def _latest_revision(repo_id: str, token: str) -> str | None:
+    try:
+        return _api(token).repo_info(repo_id, repo_type=REPO_TYPE).sha
+    except RepositoryNotFoundError:
         return None
 
 
@@ -122,19 +138,29 @@ def pull_cache(data_dir: Path, repo_id: str, token: str) -> bool:
 
 
 def pull_warehouse(data_dir: Path, repo_id: str, token: str) -> bool:
-    """Download the published warehouse into ``<data_dir>/processed``.
+    """Download the published warehouse into ``<data_dir>/processed`` if it changed.
 
-    Files land in a temporary folder first and are then moved into place, so a reader
-    never sees a half-downloaded database.
+    Returns whether new files were installed. All files come from one dataset commit (so
+    the database and manifest always match), land in a temporary folder, and are then
+    moved into place, so a reader never sees a half-downloaded database.
     """
     processed = data_dir / "processed"
     processed.mkdir(parents=True, exist_ok=True)
+    marker = processed / REVISION_MARKER
+    revision = _latest_revision(repo_id, token)
+    if revision is None:
+        return False
+    have_files = all((processed / name).exists() for name in WAREHOUSE_FILES)
+    if have_files and marker.exists() and marker.read_text(encoding="utf-8") == revision:
+        return False  # already up to date: nothing to download
+
     with tempfile.TemporaryDirectory(dir=processed) as tmp:
-        files = [_download(repo_id, token, name, Path(tmp)) for name in WAREHOUSE_FILES]
+        files = [_download(repo_id, token, name, Path(tmp), revision) for name in WAREHOUSE_FILES]
         if any(f is None for f in files):
             return False
         for file in files:
             file.replace(processed / file.name)
+    marker.write_text(revision, encoding="utf-8")
     return True
 
 

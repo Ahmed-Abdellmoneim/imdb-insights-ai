@@ -79,7 +79,7 @@ def top250_page() -> None:
         table[
             [
                 "rank",
-                "poster_url",
+                "poster_thumb_url",
                 "title",
                 "year",
                 "imdb_rating",
@@ -97,7 +97,7 @@ def top250_page() -> None:
         row_height=72,
         column_config={
             "rank": st.column_config.NumberColumn("#", width="small"),
-            "poster_url": st.column_config.ImageColumn("", width="small"),
+            "poster_thumb_url": st.column_config.ImageColumn("", width="small"),
             "title": st.column_config.TextColumn("Title", width="medium"),
             "year": st.column_config.NumberColumn("Year", format="%d"),
             "imdb_rating": st.column_config.NumberColumn("IMDb", format="%.1f"),

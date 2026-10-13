@@ -89,7 +89,9 @@ def manifest() -> dict[str, Any]:
 def top250() -> pd.DataFrame:
     return query(f"""
         with {GENRES_CTE}, {DIRECTORS_CTE}
-        select m.rank, m.tmdb_id, m.imdb_id, m.title, m.year, m.poster_url,
+        select m.rank, m.tmdb_id, m.imdb_id, m.title, m.year,
+               -- Table thumbnails: TMDB's 154px size instead of 500px (about 10x lighter).
+               replace(m.poster_url, '/w500/', '/w154/') as poster_thumb_url,
                m.imdb_rating, m.imdb_votes, m.weighted_rating, m.tmdb_rating, m.metascore,
                m.rotten_tomatoes, m.runtime_minutes, m.original_language, m.oscar_wins,
                coalesce(g.genres, []) as genres, coalesce(d.directors, []) as directors

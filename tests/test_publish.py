@@ -81,18 +81,43 @@ def test_push_requires_a_built_warehouse(tmp_path, monkeypatch):
         publish.push(tmp_path, "me/data", "token")
 
 
-def test_pull_warehouse_moves_files_into_place(tmp_path, monkeypatch):
-    def fake_download(repo_id, token, filename, target_dir):
+def _fake_hub(monkeypatch, revision="rev1"):
+    downloads = []
+
+    def fake_download(repo_id, token, filename, target_dir, revision=None):
+        downloads.append((filename, revision))
         path = target_dir / filename
-        path.write_text(f"new {filename}", encoding="utf-8")
+        path.write_text(f"{filename}@{revision}", encoding="utf-8")
         return path
 
+    state = {"revision": revision}
     monkeypatch.setattr(publish, "_download", fake_download)
+    monkeypatch.setattr(publish, "_latest_revision", lambda repo, token: state["revision"])
+    return downloads, state
+
+
+def test_pull_warehouse_installs_files_from_one_commit(tmp_path, monkeypatch):
+    downloads, _ = _fake_hub(monkeypatch)
     assert publish.pull_warehouse(tmp_path, "me/data", "token")
     processed = tmp_path / "processed"
-    assert sorted(p.name for p in processed.iterdir()) == sorted(publish.WAREHOUSE_FILES)
+    files = sorted(p.name for p in processed.iterdir() if p.name != publish.REVISION_MARKER)
+    assert files == sorted(publish.WAREHOUSE_FILES)
+    assert {rev for _, rev in downloads} == {"rev1"}  # database and manifest match
+
+
+def test_pull_warehouse_skips_download_when_unchanged(tmp_path, monkeypatch):
+    downloads, state = _fake_hub(monkeypatch)
+    publish.pull_warehouse(tmp_path, "me/data", "token")
+    downloads.clear()
+
+    assert publish.pull_warehouse(tmp_path, "me/data", "token") is False
+    assert downloads == []
+
+    state["revision"] = "rev2"  # a new refresh was published
+    assert publish.pull_warehouse(tmp_path, "me/data", "token") is True
+    assert {rev for _, rev in downloads} == {"rev2"}
 
 
 def test_pull_warehouse_reports_nothing_published(tmp_path, monkeypatch):
-    monkeypatch.setattr(publish, "_download", lambda *a: None)
+    monkeypatch.setattr(publish, "_latest_revision", lambda repo, token: None)
     assert publish.pull_warehouse(tmp_path, "me/data", "token") is False
