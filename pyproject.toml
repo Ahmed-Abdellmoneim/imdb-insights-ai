@@ -31,6 +31,32 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.17.0",
 ]
+# Model training and evaluation (step 3). Not installed by default, so CI, the app and
+# Streamlit Cloud stay light: `uv sync --group ml`.
+ml = [
+    "scikit-learn",
+    "torch",
+    "transformers",
+    "sentence-transformers",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+# Windows Smart App Control blocks DLLs from very new releases until they gain reputation.
+# These Windows-only caps keep local development working; Linux (CI, deployment) is free.
+constraint-dependencies = [
+    "scipy<1.18; sys_platform == 'win32'",
+    "regex<2026.9; sys_platform == 'win32'",
+]
+
+# CUDA 12.6 builds of PyTorch still support older GPUs (e.g. Pascal, compute 6.1).
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
 
 [tool.ruff]
 line-length = 100
