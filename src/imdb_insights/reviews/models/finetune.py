@@ -58,12 +58,15 @@ class FineTunedRegressor:
     # --- data -----------------------------------------------------------------------
 
     def encode(self, texts: list[str]) -> list[torch.Tensor]:
+        """Token ids with head+tail truncation, wrapped as ``[CLS] ... [SEP]``."""
         ids = self.tokenizer(list(texts), add_special_tokens=False, truncation=False)["input_ids"]
+        start = self.tokenizer.cls_token_id or self.tokenizer.bos_token_id
+        end = self.tokenizer.sep_token_id or self.tokenizer.eos_token_id
         out = []
         for seq in ids:
             if len(seq) > HEAD + TAIL:
                 seq = seq[:HEAD] + seq[-TAIL:]
-            out.append(torch.tensor(self.tokenizer.build_inputs_with_special_tokens(seq)))
+            out.append(torch.tensor([start, *seq, end]))
         return out
 
     def _batch(self, seqs: list[torch.Tensor]) -> dict[str, torch.Tensor]:
