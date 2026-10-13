@@ -40,5 +40,14 @@ def test_constant_predictions_have_no_rank_correlation():
     assert np.isnan(point_metrics(np.array([1, 5, 10]), np.array([6.0, 6.0, 6.0]))["spearman"])
 
 
+def test_spearman_handles_ties_like_the_textbook_definition():
+    # Known value: ranks with ties averaged, then Pearson correlation of the ranks.
+    y_true = np.array([1, 2, 2, 3, 10])
+    y_pred = np.array([2.0, 1.0, 3.0, 3.0, 9.0])
+    assert point_metrics(y_true, y_pred)["spearman"] == pytest.approx(
+        0.7632, abs=1e-4
+    )  # = scipy.stats.spearmanr
+
+
 def test_per_rating_mae():
     assert per_rating_mae(np.array([1, 1, 10]), np.array([3.0, 1.0, 9.0])) == {1: 1.0, 10: 1.0}

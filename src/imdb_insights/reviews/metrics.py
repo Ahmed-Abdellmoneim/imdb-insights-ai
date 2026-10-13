@@ -13,9 +13,12 @@ DECISION = 5.5  # a predicted rating above this counts as a positive review
 
 
 def _spearman(a: np.ndarray, b: np.ndarray) -> float:
+    """Pearson correlation of average ranks (pandas' "spearman" would need SciPy)."""
     if np.ptp(a) == 0 or np.ptp(b) == 0:  # (np.std can be 1e-16 for a constant array)
         return float("nan")
-    return float(pd.Series(a).corr(pd.Series(b), method="spearman"))
+    ranks_a = pd.Series(a).rank().to_numpy()
+    ranks_b = pd.Series(b).rank().to_numpy()
+    return float(np.corrcoef(ranks_a, ranks_b)[0, 1])
 
 
 def point_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
