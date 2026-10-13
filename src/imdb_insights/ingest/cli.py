@@ -33,8 +33,8 @@ class Options:
 
 @app.command()
 def ingest(
-    min_rating: Annotated[float, typer.Option(help="Minimum TMDB rating for a candidate.")] = 7.3,
-    min_votes: Annotated[int, typer.Option(help="Minimum TMDB votes for a candidate.")] = 600,
+    min_rating: Annotated[float, typer.Option(help="Minimum TMDB rating for a candidate.")] = 6.9,
+    min_votes: Annotated[int, typer.Option(help="Minimum TMDB votes for a candidate.")] = 250,
     tmdb_max_age_days: Annotated[
         float, typer.Option(help="Re-fetch TMDB details older than this (on average).")
     ] = 7,

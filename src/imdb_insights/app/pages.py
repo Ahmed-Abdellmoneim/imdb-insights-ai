@@ -342,15 +342,23 @@ def about_page() -> None:
     quality = manifest.get("quality", {})
     completeness_banner()
 
+    min_rating = quality.get("candidate_min_tmdb_rating")
+    min_votes = quality.get("candidate_min_tmdb_votes")
+    pool = (
+        f"Every TMDB movie rated {min_rating}+ with {min_votes:,}+ votes is a candidate"
+        if min_rating is not None and min_votes is not None
+        else "The best-rated TMDB movies are candidates"
+    )
     st.markdown(
-        """
+        f"""
         **Sources.** Candidate movies, details, cast & crew, keywords and reviews come from the
         [TMDB API](https://www.themoviedb.org/). IMDb ratings and vote counts, Metascore,
         Rotten Tomatoes scores and award summaries come from the [OMDb API](https://www.omdbapi.com/).
         The two are joined on each movie's IMDb id.
 
-        **Ranking.** Every TMDB movie rated 7.3+ with 600+ votes is a candidate. Candidates with
-        at least 25,000 IMDb votes are ranked by IMDb's published weighted rating:
+        **Ranking.** {pool} (the floors sit well below the weakest ranked movie, because TMDB
+        users rate lower than IMDb users and some films have far fewer TMDB votes). Candidates
+        with at least 25,000 IMDb votes are ranked by IMDb's published weighted rating:
         """
     )
     st.latex(r"WR = \frac{v}{v+m}R + \frac{m}{v+m}C \qquad m = 25{,}000,\ C = 7.0")

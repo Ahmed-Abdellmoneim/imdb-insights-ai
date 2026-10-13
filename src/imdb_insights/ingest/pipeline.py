@@ -28,7 +28,10 @@ log = logging.getLogger(__name__)
 DB_FILENAME = "imdb_insights.duckdb"
 # How far above the candidate floor (in TMDB rating points) the weakest ranked movie must be
 # for us to trust that no Top 250 movie was left out of the pool.
-RATING_MARGIN = 0.2
+RATING_MARGIN = 0.3
+# Likewise for votes: the ranked movie with the fewest TMDB votes should have at least this
+# multiple of the candidate vote floor.
+VOTE_MARGIN = 2.0
 
 OMDB_COLUMNS = [
     "imdb_rating", "imdb_votes", "metascore", "rotten_tomatoes", "box_office_usd", "rated",
@@ -63,6 +66,7 @@ SCHEMAS = {
 class Collection:
     candidate_ids: list[int]
     min_rating: float
+    min_votes: int
     movies: list[TmdbMovie] = field(default_factory=list)
     omdb: dict[str, OmdbMovie | None] = field(default_factory=dict)
     omdb_pending: list[str] = field(default_factory=list)
@@ -79,7 +83,7 @@ async def collect(
         min_rating=min_rating, min_votes=min_votes, snapshot=snapshot
     )
     log.info("Discovered %d candidate movies", len(ids))
-    result = Collection(candidate_ids=ids, min_rating=min_rating)
+    result = Collection(candidate_ids=ids, min_rating=min_rating, min_votes=min_votes)
 
     async def one_movie(tmdb_id: int) -> TmdbMovie | None:
         try:
@@ -210,6 +214,7 @@ def quality_report(col: Collection, tables: dict[str, pd.DataFrame]) -> dict[str
     movies = tables["movies"]
     ranked = movies[movies["rank"].notna()]
     lowest = float(ranked["tmdb_rating"].min()) if len(ranked) else None
+    fewest_votes = int(ranked["tmdb_votes"].min()) if len(ranked) else None
     warnings = []
     if len(ranked) < 250:
         warnings.append(f"only {len(ranked)} movies are eligible for the ranking")
@@ -218,19 +223,27 @@ def quality_report(col: Collection, tables: dict[str, pd.DataFrame]) -> dict[str
             f"{len(col.omdb_pending)} movies still need IMDb ratings, so the ranking is "
             "incomplete; re-run after the OMDb quota resets (cached data is reused)"
         )
-    # Candidates are every movie above min_rating on TMDB. If a ranked movie sits close to
-    # that floor, movies just below it could also belong in the Top 250.
+    # Candidates are the TMDB movies above both floors. If a ranked movie sits close to either
+    # floor, movies just below it could also belong in the Top 250. (TMDB ratings run up to
+    # ~0.6 below IMDb's, and films popular on IMDb can have few TMDB votes.)
     if lowest is not None and lowest - col.min_rating < RATING_MARGIN:
         warnings.append(
             f"a ranked movie has TMDB rating {lowest:.2f}, within {RATING_MARGIN} of the "
             f"candidate floor {col.min_rating}; lower --min-rating to be sure none are missed"
+        )
+    if fewest_votes is not None and fewest_votes < VOTE_MARGIN * col.min_votes:
+        warnings.append(
+            f"a ranked movie has only {fewest_votes} TMDB votes, under {VOTE_MARGIN}x the "
+            f"candidate floor {col.min_votes}; lower --min-votes to be sure none are missed"
         )
     return {
         "candidates": len(col.candidate_ids),
         "ranked": len(ranked),
         "complete": not col.omdb_pending and not col.failures,
         "candidate_min_tmdb_rating": col.min_rating,
+        "candidate_min_tmdb_votes": col.min_votes,
         "lowest_tmdb_rating_in_ranking": lowest,
+        "fewest_tmdb_votes_in_ranking": fewest_votes,
         "omdb_status": movies["omdb_status"].value_counts().to_dict(),
         "omdb_stopped": col.omdb_stopped,
         "stale_entries": len(col.stale),

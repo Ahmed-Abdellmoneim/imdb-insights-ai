@@ -11,7 +11,7 @@ ourselves, and (in progress) NLP over reviews and an AI assistant.
 ## What it does today
 
 ```
-TMDB discover ──► candidates (rating ≥ 7.3, ≥ 600 votes)
+TMDB discover ──► candidates (rating ≥ 6.9, ≥ 250 votes)
       │
       ├─► TMDB /movie/{id}  details · cast & crew · keywords · reviews · IMDb id
       └─► OMDb ?i={imdb_id} IMDb rating & votes · Metascore · Rotten Tomatoes · awards
