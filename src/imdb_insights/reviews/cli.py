@@ -28,6 +28,8 @@ EVAL_SETS = {
     "test_clean": "Stanford test without leaked reviews",
     "test_no_score": "Stanford test (clean) where the review does not state its x/10 score",
     "test_ood": "TMDB reviews (out of domain, includes 5-6 ratings)",
+    "sample_test": "Head-to-head sample: 1,000 clean Stanford test reviews (all models)",
+    "sample_ood": "Head-to-head sample: 500 TMDB reviews (all models)",
 }
 
 
@@ -37,7 +39,7 @@ def _paths() -> tuple[Path, Path]:
 
 
 def _eval_rows(splits: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    return {
+    sets = {
         "validation": splits[splits["split"] == "validation"],
         "test": splits[splits["split"] == "test"],
         "test_clean": splits[(splits["split"] == "test") & ~splits["leaked"]],
@@ -46,6 +48,13 @@ def _eval_rows(splits: pd.DataFrame) -> dict[str, pd.DataFrame]:
         ],
         "test_ood": splits[(splits["split"] == "test_ood") & ~splits["leaked"]],
     }
+    sample_file = get_settings().data_dir / "reviews" / "llm_sample.parquet"
+    if sample_file.exists():
+        sample_ids = set(pd.read_parquet(sample_file)["review_id"])
+        in_sample = splits["review_id"].isin(sample_ids)
+        sets["sample_test"] = splits[in_sample & (splits["split"] == "test")]
+        sets["sample_ood"] = splits[in_sample & (splits["split"] == "test_ood")]
+    return sets
 
 
 @app.callback()
@@ -95,6 +104,49 @@ def train(
     typer.echo(json.dumps(info, indent=2))
 
 
+@app.command("llm-submit")
+def llm_submit(
+    yes: Annotated[bool, typer.Option("--yes", help="Submit without the cost prompt.")] = False,
+) -> None:
+    """Draw the head-to-head sample and submit it to Claude as one batch."""
+    import anthropic
+
+    from . import llm
+
+    splits_path, _ = _paths()
+    sample = llm.build_sample(pd.read_parquet(splits_path))
+    estimate = llm.estimate_cost(sample)
+    typer.echo(f"{len(sample):,} reviews, {llm.MODEL} (effort {llm.EFFORT}), batch pricing; "
+               f"estimated cost up to ${estimate:.2f}")  # fmt: skip
+    if not yes and not typer.confirm("Submit?"):
+        raise typer.Exit(code=1)
+    path = llm.sample_path(get_settings().data_dir)
+    sample[["review_id"]].to_parquet(path, index=False)
+    batch_id = llm.submit(anthropic.Anthropic(), sample)
+    (path.parent / "llm_batch.json").write_text(json.dumps({"batch_id": batch_id}), "utf-8")
+    typer.echo(f"Submitted batch {batch_id}; run `llm-collect` once it has ended (usually < 1h).")
+
+
+@app.command("llm-collect")
+def llm_collect() -> None:
+    """Download the batch results as the ``llm`` model's predictions."""
+    import anthropic
+
+    from . import llm
+
+    _, pred_dir = _paths()
+    meta = get_settings().data_dir / "reviews" / "llm_batch.json"
+    batch_id = json.loads(meta.read_text(encoding="utf-8"))["batch_id"]
+    collected = llm.collect(anthropic.Anthropic(), batch_id)
+    if collected is None:
+        typer.echo(f"Batch {batch_id} is still running; try again later.")
+        raise typer.Exit(code=3)
+    pred_dir.mkdir(parents=True, exist_ok=True)
+    collected.predictions.to_parquet(pred_dir / "llm.parquet", index=False)
+    (pred_dir / "llm.json").write_text(json.dumps(collected.info, indent=2), encoding="utf-8")
+    typer.echo(json.dumps(collected.info, indent=2))
+
+
 @app.command()
 def evaluate() -> None:
     """Score every saved model (plus a predict-the-mean baseline) on all evaluation sets."""
@@ -118,10 +170,15 @@ def evaluate() -> None:
                 y_pred = np.full(len(rows), train_mean)
             else:
                 merged = rows.merge(preds, on="review_id", how="left")
-                if merged["prediction"].isna().any():
-                    continue  # model was not run on this set (e.g. an LLM on a sample)
-                y_pred = merged["prediction"].to_numpy()
+                coverage = merged["prediction"].notna().mean()
+                if coverage < 0.95:
+                    continue  # model was not run on this set (e.g. the LLM outside the sample)
+                # A few missing answers (refusals, errors) count as a neutral guess rather
+                # than being dropped, so a model cannot look better by skipping hard cases.
+                y_pred = merged["prediction"].fillna(train_mean).to_numpy()
             scores = metrics.evaluate(rows["rating"].to_numpy(), y_pred)
+            if preds is not None:
+                scores["coverage"] = round(float(coverage), 4)
             scores["per_rating_mae"] = metrics.per_rating_mae(rows["rating"].to_numpy(), y_pred)
             results[name]["sets"][set_name] = scores
 

@@ -34,6 +34,7 @@ dev = [
 # Model training and evaluation (step 3). Not installed by default, so CI, the app and
 # Streamlit Cloud stay light: `uv sync --group ml`.
 ml = [
+    "anthropic",
     "scikit-learn",
     "torch",
     "transformers",
