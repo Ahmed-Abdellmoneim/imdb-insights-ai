@@ -5,6 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from . import data, pages
+from .assistant_page import assistant_page
 
 
 def main() -> None:
@@ -34,6 +35,7 @@ def main() -> None:
                 icon=":material/insights:",
                 url_path="insights",
             ),
+            st.Page(assistant_page, title="Ask", icon=":material/forum:", url_path="ask"),
             st.Page(
                 pages.about_page, title="About the data", icon=":material/info:", url_path="about"
             ),

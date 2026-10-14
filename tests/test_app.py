@@ -65,3 +65,16 @@ def test_missing_database_shows_instructions(tmp_path, monkeypatch):
 
     at = AppTest.from_function(script, default_timeout=30).run()
     assert "No data yet" in at.error[0].value
+
+
+def _ask_page_script() -> None:
+    from imdb_insights.app.assistant_page import assistant_page
+
+    assistant_page()
+
+
+def test_ask_page_explains_how_to_add_a_key_when_none_is_set():
+    at = AppTest.from_function(_ask_page_script, default_timeout=30).run()
+    assert not at.exception
+    assert "LLM_API_KEY" in at.info[0].value
+    assert not at.chat_input  # nothing to type into without a key

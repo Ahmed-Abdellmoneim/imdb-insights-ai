@@ -39,8 +39,12 @@ def processed_dir() -> Path:
     return get_settings().data_dir / "processed"
 
 
+def database_path() -> Path:
+    return processed_dir() / DB_FILENAME
+
+
 def database_exists() -> bool:
-    return (processed_dir() / DB_FILENAME).exists()
+    return database_path().exists()
 
 
 @st.cache_resource(ttl=timedelta(hours=1), show_spinner="Fetching the latest data…")

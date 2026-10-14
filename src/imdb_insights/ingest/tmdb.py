@@ -9,11 +9,14 @@ This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 from __future__ import annotations
 
+import html
+import re
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import ftfy
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -97,6 +100,29 @@ def _positive(value: int | None) -> int | None:
     return value or None
 
 
+_BLOCK_TAG = re.compile(r"<\s*(br|/p|/h\d|/li|/div)\s*/?\s*>", re.IGNORECASE)
+# Only real HTML tag names, so text like "x<y and z>w" survives.
+_HTML_TAG = re.compile(
+    r"</?\s*(p|br|h[1-6]|em|strong|i|b|u|s|a|ul|ol|li|div|span|blockquote|hr|img|sup|sub|"
+    r"small|code|pre|table|thead|tbody|tr|td|th|font|center)\b[^<>]*/?>",
+    re.IGNORECASE,
+)
+
+
+def clean_review_text(text: str) -> str:
+    """Plain text for reviews: HTML removed, encoding damage repaired, line ends unified.
+
+    About 5% of TMDB reviews contain HTML (``<p>``, ``<h2>``...). A handful contain text
+    decoded with the wrong code page (e.g. Windows "\\x85" for an ellipsis), which
+    ``ftfy.fix_encoding`` repairs without touching anything else (curly quotes stay).
+    Markdown is kept: the app renders it.
+    """
+    text = ftfy.fix_encoding(text).replace("\r\n", "\n").replace("\r", "\n")
+    text = _BLOCK_TAG.sub("\n", text)
+    text = html.unescape(_HTML_TAG.sub("", text))
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def _names(items: list[dict] | None, key: str = "name") -> list[str]:
     return [i[key] for i in items or [] if i.get(key)]
 
@@ -154,7 +180,7 @@ def parse_movie(data: dict[str, Any]) -> TmdbMovie:
                 review_id=r["id"],
                 author=r.get("author") or (r.get("author_details") or {}).get("username"),
                 rating=(r.get("author_details") or {}).get("rating"),
-                content=r["content"].strip(),
+                content=clean_review_text(r["content"]),
                 created_at=r.get("created_at"),
                 url=r.get("url"),
             )

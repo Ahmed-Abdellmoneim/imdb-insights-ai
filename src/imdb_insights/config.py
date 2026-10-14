@@ -18,8 +18,16 @@ class Settings(BaseSettings):
     # Private Hugging Face dataset that stores the published warehouse and the API cache.
     hf_dataset_repo: str | None = None
     hf_token: SecretStr | None = None
+    # Assistant LLM: any OpenAI-compatible endpoint. Defaults to Groq's free tier; also works
+    # with Gemini's OpenAI endpoint, OpenRouter, or a local Ollama (http://localhost:11434/v1).
+    llm_base_url: str = "https://api.groq.com/openai/v1"
+    llm_model: str = "llama-3.3-70b-versatile"
+    llm_api_key: SecretStr | None = None
 
-    @field_validator("omdb_api_key", "tmdb_api_key", "hf_token", "hf_dataset_repo", mode="before")
+    @field_validator(
+        "omdb_api_key", "tmdb_api_key", "hf_token", "hf_dataset_repo", "llm_api_key",
+        mode="before",
+    )  # fmt: skip
     @classmethod
     def _clean(cls, value: object) -> object:
         """Drop the whitespace and byte-order marks that copy-pasting often adds.

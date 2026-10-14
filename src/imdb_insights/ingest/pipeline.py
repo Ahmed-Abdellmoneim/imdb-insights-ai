@@ -50,6 +50,8 @@ STRING_COLUMNS = [
     "collection", "poster_url", "backdrop_url", "rated", "awards", "omdb_status",
 ]  # fmt: skip
 OMDB_WORKERS = 4
+# Tables kept out of the Parquet export (embeddings are large and only the app needs them).
+NO_PARQUET_EXPORT = {"review_chunks"}
 
 # Explicit schemas for the tables that can legitimately be empty (e.g. no reviews yet), so
 # the warehouse always has every table. `movies` is never empty and keeps inferred types.
@@ -64,6 +66,12 @@ SCHEMAS = {
     "reviews": (
         "review_id VARCHAR PRIMARY KEY, tmdb_id BIGINT, source VARCHAR, author VARCHAR, "
         "rating DOUBLE, content VARCHAR, created_at TIMESTAMPTZ, url VARCHAR"
+    ),
+    # Review passages for the assistant's search (built by imdb_insights.assistant.index;
+    # empty, but present, when the search index is skipped).
+    "review_chunks": (
+        "chunk_id VARCHAR PRIMARY KEY, review_id VARCHAR, tmdb_id BIGINT, chunk_no INTEGER, "
+        "text VARCHAR, embedding FLOAT[384]"
     ),
 }
 
@@ -332,8 +340,15 @@ def write_outputs(
                 con.register("frame", df)
                 con.execute(f"CREATE OR REPLACE TABLE {name} AS SELECT * FROM frame")
                 con.unregister("frame")
+            if name in NO_PARQUET_EXPORT:
+                continue
             parquet = (out_dir / f"{name}.parquet").as_posix().replace("'", "''")
             con.execute(f"COPY {name} TO '{parquet}' (FORMAT parquet)")
+        if "review_chunks" in tables:
+            # BM25 keyword index for the assistant's hybrid search, built before the swap so
+            # readers always get the index together with the passages it covers.
+            con.execute("INSTALL fts; LOAD fts")
+            con.execute("PRAGMA create_fts_index('review_chunks', 'chunk_id', 'text', overwrite=1)")
     try:
         os.replace(tmp_path, db_path)
     except PermissionError as exc:

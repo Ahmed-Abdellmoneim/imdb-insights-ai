@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
+import pandas as pd
 import typer
 from rich.console import Console
 from rich.logging import RichHandler
@@ -48,6 +49,9 @@ def ingest(
     omdb_max_age_days: Annotated[
         float, typer.Option(help="Re-fetch IMDb ratings older than this (on average).")
     ] = 21,
+    search_index: Annotated[
+        bool, typer.Option(help="Chunk and embed reviews for the assistant's search.")
+    ] = True,
     data_dir: Annotated[Path | None, typer.Option(help="Defaults to DATA_DIR or ./data.")] = None,
 ) -> None:
     """Build the movie tables and our own IMDb-style Top 250."""
@@ -69,6 +73,9 @@ def ingest(
         omdb_max_age=timedelta(days=omdb_max_age_days),
     )
     tables, report = asyncio.run(_run(settings, data_dir, options, started))
+    tables["review_chunks"] = (
+        _review_chunks(tables["reviews"], data_dir) if search_index else pd.DataFrame()
+    )
 
     out_dir = data_dir / "processed"
     db_path = pipeline.write_outputs(tables, report, out_dir, started)
@@ -86,6 +93,18 @@ def ingest(
     if not report["complete"]:
         # Distinct exit code so schedulers can tell "partial, resume later" from a crash.
         raise typer.Exit(code=3)
+
+
+def _review_chunks(reviews: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
+    from ..assistant import index
+    from ..assistant.embedder import Embedder
+
+    embedder = Embedder(data_dir / "models" / "bge-small-en-v1.5")
+    cache = index.EmbeddingCache(data_dir / "raw" / "embeddings" / "bge-small-en-v1.5.parquet")
+    with console.status("Embedding review passages..."):
+        chunks = index.build_review_chunks(reviews, embedder, cache)
+    console.print(f"Search index: {len(chunks):,} passages from {len(reviews):,} reviews")
+    return chunks
 
 
 async def _run(settings: Settings, data_dir: Path, options: Options, started: datetime):

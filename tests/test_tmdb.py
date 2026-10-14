@@ -2,8 +2,9 @@ import asyncio
 from datetime import date
 
 import httpx
+import pytest
 
-from imdb_insights.ingest.tmdb import TmdbClient, image_url, parse_movie
+from imdb_insights.ingest.tmdb import TmdbClient, clean_review_text, image_url, parse_movie
 
 
 def test_parse_real_response(load_fixture):
@@ -93,3 +94,21 @@ def test_discover_follows_pages_until_the_last(tmp_path):
     assert pages_seen == [1, 2, 3]
     # Cache paths must be valid on Windows (no "|" from the genre filter).
     assert all("|" not in str(p) for p in tmp_path.rglob("*.json"))
+
+
+@pytest.mark.parametrize(
+    ("raw", "clean"),
+    [
+        ("<h2>Legacy</h2><p>It <em>lingers</em>.</p>", "Legacy\nIt lingers."),
+        ("Line one<br/>Line two<br>Three", "Line one\nLine two\nThree"),
+        ("Fish &amp; chips", "Fish & chips"),
+        ("Windows line\r\n\r\nends", "Windows line\n\nends"),
+        ("just prior to D-Day\x85.", "just prior to D-Day\u2026."),
+        ("It\u2019s fine, curly quotes stay", "It\u2019s fine, curly quotes stay"),
+        ("**Bold** markdown stays", "**Bold** markdown stays"),
+        ("if x<y and z>w then 3 < 5", "if x<y and z>w then 3 < 5"),
+        ("a\n\n\n\n\nb", "a\n\nb"),
+    ],
+)
+def test_clean_review_text(raw, clean):
+    assert clean_review_text(raw) == clean

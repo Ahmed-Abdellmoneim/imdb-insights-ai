@@ -18,7 +18,7 @@ jobs:
     # Skip (rather than fail nightly) until the Hugging Face dataset is configured.
     if: vars.HF_DATASET_REPO != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120  # the first run embeds every review; later runs only new ones
     env:
       TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
       OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
