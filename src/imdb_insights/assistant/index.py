@@ -99,8 +99,15 @@ def build_review_chunks(
     rows = []
     for review in reviews.itertuples():
         for n, text in enumerate(chunk_text(review.content)):
-            rows.append({"chunk_id": f"{review.review_id}-{n}", "review_id": review.review_id,
-                         "tmdb_id": review.tmdb_id, "chunk_no": n, "text": text})  # fmt: skip
+            rows.append(
+                {
+                    "chunk_id": f"{review.review_id}-{n}",
+                    "review_id": review.review_id,
+                    "tmdb_id": review.tmdb_id,
+                    "chunk_no": n,
+                    "text": text,
+                }
+            )
     chunks = pd.DataFrame(rows, columns=CHUNK_COLUMNS[:-1])
     vectors = cache.embed(embedder, chunks["text"].tolist())
     chunks["embedding"] = [v.astype(np.float32).tolist() for v in vectors]

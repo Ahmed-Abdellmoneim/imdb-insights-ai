@@ -127,9 +127,12 @@ class Agent:
             if args.get("movie") and movie is None:
                 return f"No movie matching {args['movie']!r} in the database."
             hits = search.hybrid_search(
-                con, self.embedder, args["query"], k=PASSAGES_PER_SEARCH,
+                con,
+                self.embedder,
+                args["query"],
+                k=PASSAGES_PER_SEARCH,
                 tmdb_id=movie.tmdb_id if movie else None,
-            )  # fmt: skip
+            )
         finally:
             con.close()
         answer.steps[-1].rows = len(hits)
@@ -138,8 +141,9 @@ class Agent:
         lines = []
         for hit in hits.itertuples():
             label = f"R{len(answer.sources) + 1}"
-            answer.sources.append(Source(label, hit.title, hit.year, hit.author,
-                                         hit.rating, hit.url, hit.text))  # fmt: skip
+            answer.sources.append(
+                Source(label, hit.title, hit.year, hit.author, hit.rating, hit.url, hit.text)
+            )
             rating = f"{hit.rating:g}/10" if pd.notna(hit.rating) else "no rating"
             lines.append(f"[{label}] {hit.title} ({hit.year}), {rating}: {hit.text}")
         return "\n\n".join(lines)
@@ -169,13 +173,19 @@ class Agent:
     def ask(self, question: str, history: list[dict] | None = None) -> Answer:
         started = time.monotonic()
         answer = Answer(text="")
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}, *(history or []),
-                    {"role": "user", "content": question}]  # fmt: skip
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            *(history or []),
+            {"role": "user", "content": question},
+        ]
         for _ in range(MAX_STEPS):
             response = self.client.chat.completions.create(
-                model=self.model, messages=messages, tools=TOOLS, tool_choice="auto",
+                model=self.model,
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
                 temperature=self.temperature,
-            )  # fmt: skip
+            )
             if response.usage:
                 answer.prompt_tokens += response.usage.prompt_tokens
                 answer.completion_tokens += response.usage.completion_tokens
@@ -183,15 +193,23 @@ class Agent:
             if not message.tool_calls:
                 answer.text = message.content or ""
                 break
-            messages.append({
-                "role": "assistant",
-                "content": message.content or "",
-                "tool_calls": [
-                    {"id": c.id, "type": "function",
-                     "function": {"name": c.function.name, "arguments": c.function.arguments}}
-                    for c in message.tool_calls
-                ],
-            })  # fmt: skip
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": c.id,
+                            "type": "function",
+                            "function": {
+                                "name": c.function.name,
+                                "arguments": c.function.arguments,
+                            },
+                        }
+                        for c in message.tool_calls
+                    ],
+                }
+            )
             for call in message.tool_calls:
                 output = self._call_tool(call.function.name, call.function.arguments, answer)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
