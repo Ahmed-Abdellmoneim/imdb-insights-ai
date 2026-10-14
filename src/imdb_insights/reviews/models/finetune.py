@@ -92,10 +92,25 @@ class FineTunedRegressor:
         schedule = get_linear_schedule_with_warmup(
             optimizer, int(0.06 * steps_per_epoch * self.epochs), steps_per_epoch * self.epochs
         )
-        history, best_mae, best_state = [], math.inf, None
-        started = time.monotonic()
+        history, best_mae, best_state, first_epoch, elapsed_before = [], math.inf, None, 1, 0.0
+        checkpoint = self.output_dir / "checkpoint.pt" if self.output_dir else None
+        if checkpoint and checkpoint.exists():
+            # Resume after an interruption (sleep, reboot): restore everything, including the
+            # RNG states, so the run continues exactly as if it had never stopped.
+            state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+            self.model.load_state_dict(state["model"])
+            optimizer.load_state_dict(state["optimizer"])
+            schedule.load_state_dict(state["schedule"])
+            history, best_mae, best_state = state["history"], state["best_mae"], state["best_state"]
+            np.random.set_state(state["numpy_rng"])
+            torch.set_rng_state(state["torch_rng"])
+            if state.get("cuda_rng") is not None and torch.cuda.is_available():
+                torch.cuda.set_rng_state_all(state["cuda_rng"])  # dropout runs on the GPU
+            first_epoch, elapsed_before = state["epoch"] + 1, state["elapsed"]
+            log.info("Resuming from %s after epoch %d", checkpoint, state["epoch"])
+        started = time.monotonic() - elapsed_before
 
-        for epoch in range(1, self.epochs + 1):
+        for epoch in range(first_epoch, self.epochs + 1):
             self.model.train()
             order = np.random.permutation(len(x))
             running = 0.0
@@ -124,11 +139,16 @@ class FineTunedRegressor:
             if val["mae"] < best_mae:
                 best_mae = val["mae"]
                 best_state = copy.deepcopy({k: v.cpu() for k, v in self.model.state_dict().items()})
+            if checkpoint and epoch < self.epochs:
+                self._save_checkpoint(checkpoint, epoch, optimizer, schedule, history, best_mae,
+                                      best_state, time.monotonic() - started)  # fmt: skip
 
         self.model.load_state_dict(best_state)
         if self.output_dir:
             self.model.save_pretrained(self.output_dir)
             self.tokenizer.save_pretrained(self.output_dir)
+            if checkpoint:
+                checkpoint.unlink(missing_ok=True)  # finished: the saved model supersedes it
         return {
             "base_model": Path(self.base_model).name,  # a hub id, or a local copy's folder
             "epochs": self.epochs,
@@ -140,6 +160,29 @@ class FineTunedRegressor:
             "train_minutes": round((time.monotonic() - started) / 60, 1),
             "device": torch.cuda.get_device_name(0) if self.device.type == "cuda" else "cpu",
         }
+
+    def _save_checkpoint(self, path, epoch, optimizer, schedule, history, best_mae, best_state,
+                         elapsed) -> None:  # fmt: skip
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        torch.save(
+            {
+                "epoch": epoch,
+                "model": self.model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "schedule": schedule.state_dict(),
+                "history": history,
+                "best_mae": best_mae,
+                "best_state": best_state,
+                "numpy_rng": np.random.get_state(),
+                "torch_rng": torch.get_rng_state(),
+                "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                "elapsed": elapsed,
+            },
+            tmp,
+        )
+        tmp.replace(path)  # atomic: a crash mid-save never leaves a broken checkpoint
+        log.info("Saved checkpoint after epoch %d", epoch)
 
     # --- inference --------------------------------------------------------------------
 
