@@ -90,6 +90,55 @@ GitHub Actions (daily) ──► pull API cache ◄── private Hugging Face d
 Configuration: repository secrets `TMDB_API_KEY`, `OMDB_API_KEY`, `HF_TOKEN` (write) and the
 variable `HF_DATASET_REPO`; the Streamlit app needs `HF_TOKEN` (read-only) and `HF_DATASET_REPO`.
 
+## Review rating models
+
+Predict the 1-10 star rating a reviewer gave, from the review text. Full results with 95%
+bootstrap intervals: [`reports/review_models.md`](reports/review_models.md).
+
+**Data.** Stanford Large Movie Review Dataset (25k train / 25k test, official movie-disjoint
+split) plus TMDB reviews from the warehouse as an out-of-domain test set. Validation is a
+movie-grouped slice of train. Measured and handled: 123 test reviews duplicated verbatim in
+train and one movie in both halves (flagged and excluded from the clean test set), and
+reviews that state their own "x/10" score (reported as a separate slice).
+
+| Clean Stanford test (24,873) | MAE ↓ | within ±1 ↑ | pos/neg accuracy ↑ | TMDB Spearman ↑ |
+|---|---|---|---|---|
+| predict the mean | 3.29 | 10.5% | 50.0% | – |
+| TF-IDF (1-2 grams) + ridge | 1.61 | 53.7% | 89.4% | 0.50 |
+| bge-small embeddings + ridge | 1.25 | 68.6% | 92.9% | 0.58 |
+| **DistilBERT fine-tuned** (regression head, head+tail truncation) | **1.03** | **80.6%** | **93.6%** | **0.69** |
+
+**Specialist vs. general LLM** — same 1,500-review sample, everything run free on a 4 GB
+laptop GPU (Quadro P2000):
+
+| | Stanford MAE | Stanford pos/neg | TMDB MAE | TMDB Spearman |
+|---|---|---|---|---|
+| DistilBERT fine-tuned (66M params, 22k labels) | **1.10** | **92.2%** | **1.18** | **0.68** |
+| Qwen2.5-0.5B-Instruct, zero-shot | 2.07 | 75.0% | 1.28 | 0.61 |
+| Qwen2.5-0.5B-Instruct, calibrated on Stanford | 1.85 | 86.1% | 1.84 | 0.61 |
+
+The LLM's score is the probability-weighted mean of its next-token distribution over 1-10
+(no output parsing; 99.9% of the probability mass lands on valid scores).
+
+Findings:
+- Fine-tuning a small model beats frozen embeddings, which beat bag-of-words, on every set;
+  the biggest gain is out of domain (TMDB Spearman 0.50 → 0.58 → 0.69).
+- The zero-shot LLM over-rates Stanford's deliberately polarized reviews by 1.4 stars, yet on
+  real-world TMDB reviews it is on par with the trained baselines without any training data.
+- Calibration is distribution-specific: a linear map fitted on Stanford validation fixes the
+  Stanford bias but *hurts* on TMDB (MAE 1.28 → 1.84), because it learns Stanford's scale.
+- Engineering: per-epoch checkpoints with full RNG state (a crashed-then-resumed run matches
+  an uninterrupted one exactly), fp32 training because Pascal GPUs lack fast fp16, and
+  resumable, checksum-verified model downloads.
+
+```bash
+uv sync --group ml
+uv run python -m imdb_insights.reviews prepare
+uv run python -m imdb_insights.reviews train tfidf        # also: embeddings, finetune
+uv run python -m imdb_insights.reviews llm               # local zero-shot LLM
+uv run python -m imdb_insights.reviews evaluate          # writes reports/review_models.md
+```
+
 ## Why APIs, not scraping
 
 - IMDb returns `403 Forbidden` to automated browsers and requires sign-in for more than five
@@ -104,8 +153,8 @@ variable `HF_DATASET_REPO`; the Streamlit app needs `HF_TOKEN` (read-only) and `
 - [x] Resumable multi-source ingestion, DuckDB warehouse, IMDb-style ranking, tests, CI
 - [x] Streamlit app rebuilt on the new warehouse, with smoke tests for every page
 - [x] Deployment pipeline: daily refresh via GitHub Actions, private Hugging Face storage
-- [ ] Review rating prediction: embeddings baseline vs fine-tuned transformer vs LLM, with
-      proper evaluation (Stanford Large Movie Review Dataset + TMDB reviews)
+- [x] Review rating prediction: TF-IDF vs embeddings vs fine-tuned transformer vs local LLM,
+      with leakage checks, out-of-domain testing and bootstrap confidence intervals
 - [ ] AI assistant: text-to-SQL over the warehouse + retrieval over reviews, with citations
 - [ ] LLMOps: tracing, evaluation sets, prompt versioning; Docker; MCP server
 
