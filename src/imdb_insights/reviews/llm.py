@@ -1,139 +1,147 @@
-"""Zero-shot rating prediction with Claude, via the Message Batches API.
+"""Zero-shot rating prediction with a small open-weights LLM running locally (free).
 
-No training: the model reads each review and returns the rating it believes the author
-gave, as schema-validated JSON. Run on a stratified sample (the same sample every model is
-scored on), submitted as one batch (50% of standard prices; most batches finish within an
-hour). Refusals and errors are counted, never silently dropped.
+Instead of letting the model write an answer and parsing it, we read its next-token
+probabilities for the scores 1-10 and take the probability-weighted mean. There is no
+parsing failure, and the prediction is a calibrated-looking expected value suited to MAE.
+
+Digits are single tokens in Qwen's vocabulary, so "10" is the token "1" followed by "0":
+
+    P(10) = P("1") * P("0" | "1")        P(1) = P("1") * (1 - P("0" | "1"))
+    P(k)  = P("k") for k = 2..9
+
+and the ten probabilities are renormalized (the mass the model puts on any other token is
+reported as ``answer_mass``, a check that it understood the instruction).
+
+Everything heavy (torch, transformers) is imported lazily so the sampling helpers can be
+used and tested without the optional ``ml`` dependency group.
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
+import time
 from pathlib import Path
 
-import anthropic
+import numpy as np
 import pandas as pd
-from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
-from anthropic.types.messages.batch_create_params import Request
-
-MODEL = "claude-opus-5-5"
-EFFORT = "low"  # judging a review's sentiment needs little deliberation
-MAX_TOKENS = 2048  # thinking counts toward max_tokens; the answer itself is ~10 tokens
-# Batch prices per million tokens for MODEL (50% of $4 input / $20 output).
-BATCH_PRICE_IN, BATCH_PRICE_OUT = 2.0, 10.0
 
 SYSTEM = (
-    "You are rating movie reviews. Each review was written by a user of a movie site who also "
-    "gave the movie a score from 1 (worst) to 10 (best). Read the review and estimate the "
-    "score its author gave. Judge the author's overall opinion of the movie, not your own. "
-    "Answer with the single most likely integer score."
+    "You read a movie review and estimate the score from 1 (worst) to 10 (best) that its "
+    "author gave the movie. Judge the author's overall opinion, not your own. "
+    "Reply with only the number."
 )
-SCHEMA = {
-    "type": "object",
-    "properties": {"rating": {"type": "integer", "minimum": 1, "maximum": 10}},
-    "required": ["rating"],
-    "additionalProperties": False,
-}
+MAX_REVIEW_TOKENS = 768  # head + tail of longer reviews, like the fine-tuned model
+SCORES = np.arange(1, 11)
+
+
+# --- sampling -----------------------------------------------------------------------------
 
 
 def stratified_sample(rows: pd.DataFrame, n: int, seed: int = 13) -> pd.DataFrame:
     """``n`` rows with the same rating mix as ``rows`` (proportional allocation)."""
     if len(rows) <= n:
         return rows
-    shares = rows["rating"].value_counts(normalize=True)
-    quotas = (shares * n).round().astype(int)
+    quotas = (rows["rating"].value_counts(normalize=True) * n).round().astype(int)
     parts = [
         rows[rows["rating"] == rating].sample(
-            min(q, (rows["rating"] == rating).sum()), random_state=seed
+            min(q, int((rows["rating"] == rating).sum())), random_state=seed
         )  # fmt: skip
         for rating, q in quotas.items()
     ]
     return pd.concat(parts)
 
 
-def build_sample(splits: pd.DataFrame, n_test: int = 1000, n_ood: int = 500) -> pd.DataFrame:
+def build_sample(
+    splits: pd.DataFrame, n_test: int = 1000, n_ood: int = 500, n_validation: int = 300
+) -> pd.DataFrame:
+    """Head-to-head evaluation sample, plus a validation slice for calibration."""
     clean_test = splits[(splits["split"] == "test") & ~splits["leaked"]]
     clean_ood = splits[(splits["split"] == "test_ood") & ~splits["leaked"]]
-    return pd.concat([stratified_sample(clean_test, n_test), stratified_sample(clean_ood, n_ood)])
-
-
-def build_requests(sample: pd.DataFrame) -> list[Request]:
-    return [
-        Request(
-            custom_id=review_id,
-            params=MessageCreateParamsNonStreaming(
-                model=MODEL,
-                max_tokens=MAX_TOKENS,
-                system=SYSTEM,
-                output_config={
-                    "effort": EFFORT,
-                    "format": {"type": "json_schema", "schema": SCHEMA},
-                },  # fmt: skip
-                messages=[{"role": "user", "content": f"<review>\n{text}\n</review>"}],
-            ),
-        )
-        for review_id, text in zip(sample["review_id"], sample["text"], strict=True)
-    ]
-
-
-def submit(client: anthropic.Anthropic, sample: pd.DataFrame) -> str:
-    # Batch custom_ids allow 1-64 characters from [a-zA-Z0-9_-].
-    return client.messages.batches.create(requests=build_requests(sample)).id
-
-
-@dataclass
-class Collected:
-    predictions: pd.DataFrame
-    info: dict
-
-
-def collect(client: anthropic.Anthropic, batch_id: str) -> Collected | None:
-    """Results once the batch has ended (``None`` while it is still running)."""
-    batch = client.messages.batches.retrieve(batch_id)
-    if batch.processing_status != "ended":
-        return None
-    rows, outcomes = [], {"succeeded": 0, "refused": 0, "unparseable": 0, "errored": 0}
-    tokens_in = tokens_out = 0
-    for result in client.messages.batches.results(batch_id):
-        if result.result.type != "succeeded":
-            outcomes["errored"] += 1
-            continue
-        msg = result.result.message
-        tokens_in += msg.usage.input_tokens
-        tokens_out += msg.usage.output_tokens
-        if msg.stop_reason == "refusal":
-            outcomes["refused"] += 1
-            continue
-        text = next((b.text for b in msg.content if b.type == "text"), "")
-        try:
-            rating = int(json.loads(text)["rating"])
-        except (ValueError, KeyError, TypeError):
-            outcomes["unparseable"] += 1
-            continue
-        outcomes["succeeded"] += 1
-        rows.append({"review_id": result.custom_id, "prediction": float(rating)})
-    cost = tokens_in / 1e6 * BATCH_PRICE_IN + tokens_out / 1e6 * BATCH_PRICE_OUT
-    info = {
-        "model": MODEL,
-        "effort": EFFORT,
-        "api": "Message Batches (50% price)",
-        "batch_id": batch_id,
-        "outcomes": outcomes,
-        "input_tokens": tokens_in,
-        "output_tokens": tokens_out,
-        "cost_usd": round(cost, 2),
-        "cost_per_1k_reviews_usd": round(cost / max(1, sum(outcomes.values())) * 1000, 2),
-    }
-    return Collected(pd.DataFrame(rows, columns=["review_id", "prediction"]), info)
-
-
-def estimate_cost(sample: pd.DataFrame, thinking_tokens: int = 300) -> float:
-    """Rough upper estimate before submitting (~1.4 tokens per word)."""
-    tokens_in = (len(SYSTEM.split()) + sample["text"].str.split().str.len() + 10) * 1.4
-    tokens_out = len(sample) * (thinking_tokens + 15)
-    return float(tokens_in.sum() / 1e6 * BATCH_PRICE_IN + tokens_out / 1e6 * BATCH_PRICE_OUT)
+    validation = splits[splits["split"] == "validation"]
+    return pd.concat(
+        [
+            stratified_sample(clean_test, n_test),
+            stratified_sample(clean_ood, n_ood),
+            stratified_sample(validation, n_validation),
+        ]
+    )
 
 
 def sample_path(data_dir: Path) -> Path:
     return data_dir / "reviews" / "llm_sample.parquet"
+
+
+def calibrate(raw: np.ndarray, truth: np.ndarray) -> tuple[float, float]:
+    """Least-squares line mapping the LLM's expected score onto the dataset's scale."""
+    slope, intercept = np.polyfit(raw, truth, 1)
+    return float(slope), float(intercept)
+
+
+# --- the rater ------------------------------------------------------------------------
+
+
+class LocalLLMRater:
+    def __init__(self, model_dir: Path) -> None:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        self.torch = torch
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
+        # fp32: Pascal GPUs have very low fp16 throughput; 0.5B parameters fit in 4 GB.
+        self.model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.float32)
+        self.model.to(self.device).eval()
+        self.name = Path(model_dir).name
+        self.digit_ids = []
+        for d in range(10):
+            ids = self.tokenizer.encode(str(d), add_special_tokens=False)
+            if len(ids) != 1:
+                raise ValueError(f"Digit {d} is not a single token for {self.name}")
+            self.digit_ids.append(ids[0])
+
+    def _prompt(self, text: str) -> list[int]:
+        ids = self.tokenizer.encode(text, add_special_tokens=False)
+        if len(ids) > MAX_REVIEW_TOKENS:
+            head = MAX_REVIEW_TOKENS // 4
+            ids = ids[:head] + ids[-(MAX_REVIEW_TOKENS - head) :]
+        review = self.tokenizer.decode(ids)
+        messages = [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": f"Review:\n{review}"},
+        ]
+        return self.tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=True, return_dict=False
+        )
+
+    def score_distribution(self, text: str) -> tuple[np.ndarray, float]:
+        """Probabilities of scores 1..10 (renormalized) and the raw mass on valid answers."""
+        torch = self.torch
+        with torch.no_grad():
+            ids = torch.tensor([self._prompt(text)], device=self.device)
+            first = self.model(input_ids=ids, use_cache=True)
+            p = torch.softmax(first.logits[0, -1].float(), dim=-1)
+            # Second step only for "1": is it "1" or the start of "10"?
+            one = torch.tensor([[self.digit_ids[1]]], device=self.device)
+            second = self.model(input_ids=one, past_key_values=first.past_key_values)
+            p_zero_after_one = torch.softmax(second.logits[0, -1].float(), dim=-1)[
+                self.digit_ids[0]
+            ].item()
+        digits = p[self.digit_ids].cpu().numpy()
+        probs = np.empty(10)
+        probs[0] = digits[1] * (1 - p_zero_after_one)  # "1"
+        probs[1:9] = digits[2:10]  # "2".."9"
+        probs[9] = digits[1] * p_zero_after_one  # "10"
+        mass = float(probs.sum())
+        return probs / mass, mass
+
+    def predict(self, texts: list[str], log_every: int = 100) -> tuple[np.ndarray, np.ndarray]:
+        """Expected scores and the per-review answer mass."""
+        expected, masses = np.empty(len(texts)), np.empty(len(texts))
+        started = time.monotonic()
+        for i, text in enumerate(texts):
+            probs, masses[i] = self.score_distribution(text)
+            expected[i] = float(probs @ SCORES)
+            if log_every and (i + 1) % log_every == 0:
+                rate = (time.monotonic() - started) / (i + 1)
+                print(f"{i + 1}/{len(texts)}  {rate:.2f}s/review  "
+                      f"eta {rate * (len(texts) - i - 1) / 60:.0f} min", flush=True)  # fmt: skip
+        return expected, masses

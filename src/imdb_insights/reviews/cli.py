@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Annotated
 
@@ -109,53 +110,53 @@ def train(
     typer.echo(json.dumps(info, indent=2))
 
 
-def _claude(anthropic):
-    """A client using ANTHROPIC_API_KEY from .env if set, else the SDK's own lookup."""
-    key = get_settings().anthropic_api_key
-    return anthropic.Anthropic(api_key=key.get_secret_value()) if key else anthropic.Anthropic()
-
-
-@app.command("llm-submit")
-def llm_submit(
-    yes: Annotated[bool, typer.Option("--yes", help="Submit without the cost prompt.")] = False,
+@app.command()
+def llm(
+    model_dir: Annotated[
+        Path, typer.Option(help="Local folder of an instruction-tuned causal LM.")
+    ] = Path("data/reviews/models/Qwen2.5-0.5B-Instruct"),
 ) -> None:
-    """Draw the head-to-head sample and submit it to Claude as one batch."""
-    import anthropic
+    """Zero-shot ratings from a local open-weights LLM on the head-to-head sample (free).
 
-    from . import llm
+    Writes two prediction sets: the raw expected score, and the same scores mapped onto the
+    dataset's scale with a line fitted on the sample's validation reviews.
+    """
+    from . import llm as local_llm
 
-    splits_path, _ = _paths()
-    sample = llm.build_sample(pd.read_parquet(splits_path))
-    estimate = llm.estimate_cost(sample)
-    typer.echo(f"{len(sample):,} reviews, {llm.MODEL} (effort {llm.EFFORT}), batch pricing; "
-               f"estimated cost up to ${estimate:.2f}")  # fmt: skip
-    if not yes and not typer.confirm("Submit?"):
-        raise typer.Exit(code=1)
-    path = llm.sample_path(get_settings().data_dir)
+    splits_path, pred_dir = _paths()
+    sample = local_llm.build_sample(pd.read_parquet(splits_path))
+    path = local_llm.sample_path(get_settings().data_dir)
     sample[["review_id"]].to_parquet(path, index=False)
-    batch_id = llm.submit(_claude(anthropic), sample)
-    (path.parent / "llm_batch.json").write_text(json.dumps({"batch_id": batch_id}), "utf-8")
-    typer.echo(f"Submitted batch {batch_id}; run `llm-collect` once it has ended (usually < 1h).")
 
+    rater = local_llm.LocalLLMRater(model_dir)
+    started = time.monotonic()
+    expected, mass = rater.predict(sample["text"].tolist())
+    minutes = (time.monotonic() - started) / 60
 
-@app.command("llm-collect")
-def llm_collect() -> None:
-    """Download the batch results as the ``llm`` model's predictions."""
-    import anthropic
-
-    from . import llm
-
-    _, pred_dir = _paths()
-    meta = get_settings().data_dir / "reviews" / "llm_batch.json"
-    batch_id = json.loads(meta.read_text(encoding="utf-8"))["batch_id"]
-    collected = llm.collect(_claude(anthropic), batch_id)
-    if collected is None:
-        typer.echo(f"Batch {batch_id} is still running; try again later.")
-        raise typer.Exit(code=3)
+    is_val = (sample["split"] == "validation").to_numpy()
+    slope, intercept = local_llm.calibrate(expected[is_val], sample["rating"].to_numpy()[is_val])
+    eval_ids = sample.loc[~is_val, "review_id"].to_numpy()
+    raw, calibrated = expected[~is_val], slope * expected[~is_val] + intercept
+    info = {
+        "model": rater.name,
+        "method": "zero-shot; expected score from next-token probabilities of 1..10",
+        "reviews": int((~is_val).sum()),
+        "mean_answer_mass": round(float(mass.mean()), 4),
+        "seconds_per_review": round(minutes * 60 / len(sample), 3),
+        "device": rater.device,
+    }
     pred_dir.mkdir(parents=True, exist_ok=True)
-    collected.predictions.to_parquet(pred_dir / "llm.parquet", index=False)
-    (pred_dir / "llm.json").write_text(json.dumps(collected.info, indent=2), encoding="utf-8")
-    typer.echo(json.dumps(collected.info, indent=2))
+    for name, values, extra in [
+        ("llm-zero-shot", raw, {}),
+        ("llm-calibrated", calibrated, {"calibration": {"slope": round(slope, 4),
+                                        "intercept": round(intercept, 4),
+                                        "fitted_on_validation_reviews": int(is_val.sum())}}),
+    ]:  # fmt: skip
+        pd.DataFrame({"review_id": eval_ids, "prediction": values}).to_parquet(
+            pred_dir / f"{name}.parquet", index=False
+        )
+        (pred_dir / f"{name}.json").write_text(json.dumps(info | extra, indent=2), "utf-8")
+    typer.echo(json.dumps(info | {"calibration": [slope, intercept]}, indent=2))
 
 
 @app.command()
