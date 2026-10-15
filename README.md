@@ -156,19 +156,91 @@ The model is any OpenAI-compatible endpoint (default: Groq's free tier,
 `openai/gpt-oss-120b`). Tool errors and provider-rejected tool calls go back to the model so
 it can correct itself; every step is shown under "How I got this".
 
-**Evaluation** (`python -m imdb_insights.assistant eval`, [`reports/assistant_eval.md`](reports/assistant_eval.md)):
-21 cases — facts graded against reference SQL run on the live warehouse, opinions graded on
-valid citations from the right movie, and safety cases (off-topic, destructive request,
-prompt injection).
+## Evaluation, tracing and prompt versioning
 
-| model (Groq free tier) | passed | median latency | tokens / question |
+**Evaluation** — `python -m imdb_insights.assistant eval [--repeat N]`, report in
+[`reports/assistant_eval.md`](reports/assistant_eval.md). 32 cases:
+
+| kind | graded on |
+|---|---|
+| fact (21) | reference SQL run on the *live* warehouse at eval time, so the set survives daily refreshes; includes multi-step aggregations, comparisons and a follow-up that needs the conversation history |
+| opinion (5) | at least one citation, every cited label actually received, all from the movie asked about |
+| abstain (3) | questions the data cannot answer (opening weekend, cinema admissions, a named critic's review): the model must say so instead of answering from memory |
+| safety (3) | off-topic request (no tools), destructive request (no write executed), prompt injection (no system-prompt leak) |
+
+**Tracing** — every answer (app, CLI and eval) is written as one JSON line: model, prompt
+version, question, answer, each tool step with its SQL, rows, error and latency, citations and
+token usage (review passage text is not stored). `python -m imdb_insights.assistant traces`
+reports p50/p95 latency, tokens, error rates and tool use per model and prompt version
+([example](reports/assistant_traces.md)).
+
+**Prompt versioning** — `PROMPT_VERSION` is a hash of the system prompt and tool schemas,
+recorded with every trace and evaluation.
+
+How the loop paid off — each change below was found by the evaluation and diagnosed from traces:
+
+| prompt / change | result |
+|---|---|
+| `e9360b0eed` first run of the 32-case set | 29/32 |
+| grader: curly apostrophes ("doesn’t") hid two correct abstentions | grader fix |
+| `7ac6bf699f` schema guide: DuckDB's `/` is decimal division and integer casts round, so `(year/10)::int*10` put 2015 in the 2020s | 31/32 |
+| `c27b9475a6` schema guide: `billing` is 0-based, so "top five billed" is `billing < 5` (the model had excluded every lead actor) | **32/32** |
+
+Earlier grader fixes: GPT-OSS sometimes writes citations with zero-width spaces inside the
+brackets or with CJK brackets (`【R1】`); both are normalized before matching.
+
+| model (Groq free tier) | 21-case set | median latency | tokens / question |
 |---|---|---|---|
 | openai/gpt-oss-120b | 21/21 | 3.3 s | ~2,000 |
 | qwen/qwen3.8-27b | 21/21 | 18.4 s | ~2,400 |
 
-Both models saturate this set, so its next version needs harder cases (multi-step questions,
-ambiguous titles, unanswerable questions). Grading bugs it surfaced, now fixed: GPT-OSS writes
-citations with zero-width spaces (`[\u200bR2\u200b]`) or CJK brackets (`【R1】`).
+Limits worth knowing: the model is not deterministic even at temperature 0 (the same case can
+pass and fail across runs, hence `--repeat`), and Groq's free tier caps GPT-OSS-120B at 200k
+tokens per day *per account*, shared by the public app and evaluation runs; a rate-limited
+evaluation stops with a partial report instead of losing its results.
+
+## MCP server
+
+The warehouse is also available as an [MCP](https://modelcontextprotocol.io) server, so Claude
+Desktop, IDEs or other agents can use it as tools. The client's model does the reasoning, so
+no LLM key is needed.
+
+| tool | what it does |
+|---|---|
+| `top_movies(limit, genre, decade)` | the Top 250 in rank order |
+| `movie_details(title)` | ratings from four sources, crew, cast, keywords, budget, awards |
+| `query_database(query)` | one guarded, read-only SELECT (same guardrails as the assistant) |
+| `search_reviews(query, movie, limit)` | hybrid review search with author, rating and link |
+
+Plus the `imdb-insights://schema` resource. All tools return structured output and are
+annotated read-only; anticipated failures (refused SQL, unknown movie) reach the client's
+model as readable errors so it can correct itself. Example Claude Desktop configuration:
+
+```json
+{
+  "mcpServers": {
+    "imdb-insights": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/imdb-insights-ai", "run", "python", "-m",
+               "imdb_insights.mcp_server"]
+    }
+  }
+}
+```
+
+## Docker
+
+```bash
+docker build -t imdb-insights .
+docker run -p 8501:8501 -e HF_TOKEN=... -e HF_DATASET_REPO=you/imdb-insights-data \
+  -e LLM_API_KEY=... imdb-insights
+```
+
+Two-stage build with `uv` from the lock file; the runtime image runs as a non-root user with a
+health check. Nothing secret or data-related is baked in: the container downloads the
+published warehouse at startup (or mount a folder at `/data`). CI builds the image on every
+push and checks that it turns healthy, runs as non-root, contains no `.env`, and that the MCP
+server imports.
 
 ## Why APIs, not scraping
 
