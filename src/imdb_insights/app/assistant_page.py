@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 import streamlit as st
 
 from ..config import get_settings
@@ -41,7 +39,9 @@ def _client():
 
 def _render_answer(answer) -> None:
     st.markdown(answer.text)
-    cited = set(re.findall(r"\[(R\d+)\]", answer.text))
+    from ..assistant.agent import cited_labels
+
+    cited = cited_labels(answer.text)
     sources = [s for s in answer.sources if s.label in cited]
     if sources:
         with st.expander(f"Sources ({len(sources)})"):

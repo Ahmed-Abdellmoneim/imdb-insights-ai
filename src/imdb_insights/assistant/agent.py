@@ -10,6 +10,7 @@ recorded in a trace (tool, arguments, latency, errors, token usage).
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,28 @@ from . import search, sql
 from .embedder import Embedder
 
 MAX_STEPS = 6
+# Zero-width characters some models put inside citations ("[​R2​]"); they would
+# break citation matching, copy-paste and search, and carry no meaning in an answer.
+_INVISIBLE = re.compile("[​‌‍⁠﻿]")
+# Square brackets, plus the CJK lenticular and full-width brackets GPT-OSS models often use.
+_CITATION = re.compile(r"[\[【［]\s*(R\d+)\s*[\]】］]")
+
+
+def clean_answer(text: str) -> str:
+    """Remove invisible characters and normalize citations to the plain ``[R2]`` form."""
+    return _CITATION.sub(r"[\1]", _INVISIBLE.sub("", text))
+
+
+def _is_invalid_tool_call(exc: Exception) -> bool:
+    """Provider-side rejection of a malformed tool call (Groq: code "tool_use_failed")."""
+    return getattr(exc, "code", None) == "tool_use_failed" or "tool_use_failed" in str(exc)
+
+
+def cited_labels(text: str) -> set[str]:
+    """Source labels cited in an answer, e.g. {"R1", "R4"}."""
+    return set(_CITATION.findall(_INVISIBLE.sub("", text)))
+
+
 PASSAGES_PER_SEARCH = 6
 
 SYSTEM_PROMPT = f"""\
@@ -179,19 +202,35 @@ class Agent:
             {"role": "user", "content": question},
         ]
         for _ in range(MAX_STEPS):
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                temperature=self.temperature,
-            )
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=TOOLS,
+                    tool_choice="auto",
+                    temperature=self.temperature,
+                )
+            except Exception as exc:  # noqa: BLE001 - re-raised unless it is a bad tool call
+                if not _is_invalid_tool_call(exc):
+                    raise
+                # The provider rejected a malformed tool call (e.g. a missing required
+                # argument). Record it and let the model try again, like any tool error.
+                answer.steps.append(Step("invalid_tool_call", {}, 0.0, error=str(exc)[:300]))
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "Your previous tool call was rejected because its arguments "
+                        "did not match the tool's schema. Call the tool again with all required "
+                        "arguments.",
+                    }
+                )
+                continue
             if response.usage:
                 answer.prompt_tokens += response.usage.prompt_tokens
                 answer.completion_tokens += response.usage.completion_tokens
             message = response.choices[0].message
             if not message.tool_calls:
-                answer.text = message.content or ""
+                answer.text = clean_answer(message.content or "")
                 break
             messages.append(
                 {

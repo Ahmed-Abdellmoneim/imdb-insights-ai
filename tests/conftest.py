@@ -20,7 +20,15 @@ def no_real_credentials(monkeypatch):
     over the .env file, and blank values mean "not configured")."""
     from imdb_insights.config import get_settings
 
-    for name in ("TMDB_API_KEY", "OMDB_API_KEY", "HF_TOKEN", "HF_DATASET_REPO"):
+    for name in (
+        "TMDB_API_KEY",
+        "OMDB_API_KEY",
+        "HF_TOKEN",
+        "HF_DATASET_REPO",
+        "LLM_API_KEY",
+        "GROQ_API_KEY",
+        "GROQ",
+    ):
         monkeypatch.setenv(name, "")
     get_settings.cache_clear()
     yield

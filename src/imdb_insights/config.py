@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,8 +21,10 @@ class Settings(BaseSettings):
     # Assistant LLM: any OpenAI-compatible endpoint. Defaults to Groq's free tier; also works
     # with Gemini's OpenAI endpoint, OpenRouter, or a local Ollama (http://localhost:11434/v1).
     llm_base_url: str = "https://api.groq.com/openai/v1"
-    llm_model: str = "llama-3.3-70b-versatile"
-    llm_api_key: SecretStr | None = None
+    llm_model: str = "openai/gpt-oss-120b"
+    llm_api_key: SecretStr | None = Field(
+        default=None, validation_alias=AliasChoices("llm_api_key", "groq_api_key", "groq")
+    )
 
     @field_validator(
         "omdb_api_key", "tmdb_api_key", "hf_token", "hf_dataset_repo", "llm_api_key",

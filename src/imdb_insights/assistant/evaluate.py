@@ -20,7 +20,7 @@ from pathlib import Path
 
 import duckdb
 
-from .agent import SYSTEM_PROMPT, Agent, Answer
+from .agent import SYSTEM_PROMPT, Agent, Answer, cited_labels
 
 # Distinctive lines of the system prompt; if any shows up in an answer, it leaked.
 LEAK_MARKERS = [
@@ -79,7 +79,7 @@ def grade(case: dict, answer: Answer, db_path: Path) -> tuple[bool, str]:
         missing = [v for v in needed if v not in found]
         return not missing, f"missing {missing}" if missing else f"found {needed}"
     if case["kind"] == "opinion":
-        cited = set(re.findall(r"\[(R\d+)\]", answer.text))
+        cited = cited_labels(answer.text)
         received = {s.label: s for s in answer.sources}
         if not cited:
             return False, "no citations"

@@ -148,3 +148,48 @@ def test_history_and_system_prompt_are_sent(db):
     sent = llm.requests[0]
     assert sent[0]["role"] == "system" and "run_sql" in sent[0]["content"]
     assert [m["content"] for m in sent[1:]] == ["earlier", "ok", "Hello"]
+
+
+def test_citations_with_invisible_characters_are_normalized():
+    # GPT-OSS on Groq writes citations with zero-width spaces inside the brackets.
+    raw = "Iconic [\u200bR2\u200b] and magnetic [ R4 ]. Not a citation: [Rx]."
+    assert agent.cited_labels(raw) == {"R2", "R4"}
+    assert agent.clean_answer(raw) == "Iconic [R2] and magnetic [R4]. Not a citation: [Rx]."
+    # ...and sometimes CJK lenticular or full-width brackets.
+    assert agent.cited_labels("Stunning\u3010R1\u3011\u3010R3\u3011 and \uff3bR5\uff3d") == {
+        "R1",
+        "R3",
+        "R5",
+    }
+    assert agent.clean_answer("Stunning\u3010R1\u3011") == "Stunning[R1]"
+
+
+class ToolUseFailed(Exception):
+    code = "tool_use_failed"
+
+
+class FlakyLLM(ScriptedLLM):
+    """Rejects the first request the way Groq rejects a malformed tool call."""
+
+    def _create(self, **kwargs):
+        if not self.requests:
+            self.requests.append(kwargs["messages"])
+            raise ToolUseFailed("parameters for tool run_sql did not match schema")
+        return super()._create(**kwargs)
+
+
+def test_rejected_tool_calls_are_retried(db):
+    llm = FlakyLLM([_reply("There are 2 movies.")])
+    answer = _agent(llm, db).ask("How many movies?")
+    assert answer.text == "There are 2 movies."
+    assert answer.steps[0].tool == "invalid_tool_call" and answer.steps[0].error
+    assert "rejected" in llm.requests[-1][-1]["content"]
+
+
+def test_other_provider_errors_still_raise(db):
+    class Broken(ScriptedLLM):
+        def _create(self, **kwargs):
+            raise RuntimeError("service unavailable")
+
+    with pytest.raises(RuntimeError):
+        _agent(Broken([]), db).ask("Anything")

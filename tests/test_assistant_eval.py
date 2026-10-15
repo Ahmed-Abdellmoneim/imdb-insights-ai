@@ -91,3 +91,9 @@ def test_the_shipped_eval_set_is_well_formed():
             duckdb.extract_statements(case["gold_sql"])  # parses
         if case["kind"] == "opinion":
             assert case["movie"] and case["tool"] == "search_reviews"
+
+
+def test_opinion_grading_accepts_zero_width_citations(db):
+    case = {"id": "o", "kind": "opinion", "question": "q", "movie": "Interstellar"}
+    answer = _opinion_answer("Slow [\u200bR1\u200b].", ["Interstellar"])
+    assert ev.grade(case, answer, db)[0]
