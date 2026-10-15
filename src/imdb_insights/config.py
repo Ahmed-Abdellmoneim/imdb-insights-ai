@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,13 +22,15 @@ class Settings(BaseSettings):
     # with Gemini's OpenAI endpoint, OpenRouter, or a local Ollama (http://localhost:11434/v1).
     llm_base_url: str = "https://api.groq.com/openai/v1"
     llm_model: str = "openai/gpt-oss-120b"
-    llm_api_key: SecretStr | None = Field(
-        default=None, validation_alias=AliasChoices("llm_api_key", "groq_api_key", "groq")
-    )
+    llm_api_key: SecretStr | None = None
+    # Other names people give the same key; the first non-blank one is used (an alias list
+    # would stop at the first name that exists, even if it is blank).
+    groq_api_key: SecretStr | None = Field(default=None, exclude=True)
+    groq: SecretStr | None = Field(default=None, exclude=True)
 
     @field_validator(
         "omdb_api_key", "tmdb_api_key", "hf_token", "hf_dataset_repo", "llm_api_key",
-        mode="before",
+        "groq_api_key", "groq", mode="before",
     )  # fmt: skip
     @classmethod
     def _clean(cls, value: object) -> object:
@@ -37,9 +39,15 @@ class Settings(BaseSettings):
         An empty value means "not configured".
         """
         if isinstance(value, str):
-            value = value.strip().lstrip("﻿").strip()
+            value = value.strip().lstrip("\ufeff").strip()
             return value or None
         return value
+
+    @model_validator(mode="after")
+    def _llm_key_fallbacks(self) -> Settings:
+        if self.llm_api_key is None:
+            self.llm_api_key = self.groq_api_key or self.groq
+        return self
 
 
 @lru_cache

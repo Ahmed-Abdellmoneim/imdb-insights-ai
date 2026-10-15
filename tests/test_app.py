@@ -78,3 +78,20 @@ def test_ask_page_explains_how_to_add_a_key_when_none_is_set():
     assert not at.exception
     assert "LLM_API_KEY" in at.info[0].value
     assert not at.chat_input  # nothing to type into without a key
+
+
+def test_streamlit_secrets_reach_the_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))  # no warehouse: main() stops early
+    monkeypatch.delenv("GROQ", raising=False)
+    monkeypatch.delenv("groq", raising=False)
+    get_settings.cache_clear()
+
+    def script():
+        from imdb_insights.app.main import main
+
+        main()
+
+    at = AppTest.from_function(script, default_timeout=30)
+    at.secrets["groq"] = "gsk_from_secrets"
+    at.run()
+    assert get_settings().llm_api_key.get_secret_value() == "gsk_from_secrets"

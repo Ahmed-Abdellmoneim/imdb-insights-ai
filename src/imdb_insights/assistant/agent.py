@@ -23,9 +23,9 @@ from . import search, sql
 from .embedder import Embedder
 
 MAX_STEPS = 6
-# Zero-width characters some models put inside citations ("[​R2​]"); they would
+# Zero-width characters some models put inside citations ("[\u200bR2\u200b]"); they would
 # break citation matching, copy-paste and search, and carry no meaning in an answer.
-_INVISIBLE = re.compile("[​‌‍⁠﻿]")
+_INVISIBLE = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
 # Square brackets, plus the CJK lenticular and full-width brackets GPT-OSS models often use.
 _CITATION = re.compile(r"[\[【［]\s*(R\d+)\s*[\]】］]")
 

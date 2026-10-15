@@ -2,14 +2,33 @@
 
 from __future__ import annotations
 
+import os
+
 import streamlit as st
 
+from ..config import get_settings
 from . import data, pages
 from .assistant_page import assistant_page
 
 
+def _export_secrets() -> None:
+    """Make Streamlit secrets visible to the settings, which read environment variables.
+
+    Only top-level string secrets are copied, and real environment variables win.
+    """
+    try:
+        items = dict(st.secrets)
+    except (FileNotFoundError, st.errors.StreamlitSecretNotFoundError):
+        return  # no secrets file: local development with .env
+    for key, value in items.items():
+        if isinstance(value, str) and key not in os.environ:
+            os.environ[key] = value
+    get_settings.cache_clear()
+
+
 def main() -> None:
     st.set_page_config(page_title="IMDb Insights", page_icon=":material/movie:", layout="wide")
+    _export_secrets()
 
     data.sync_from_hub()
     if not data.database_exists():
