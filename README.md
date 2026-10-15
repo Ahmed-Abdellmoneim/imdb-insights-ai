@@ -139,6 +139,37 @@ uv run python -m imdb_insights.reviews llm               # local zero-shot LLM
 uv run python -m imdb_insights.reviews evaluate          # writes reports/review_models.md
 ```
 
+## AI assistant
+
+Ask questions in plain English on the app's **Ask** page (or `python -m imdb_insights.assistant
+ask "..."`). A tool-calling agent picks between two tools:
+
+- **`run_sql`** for facts and numbers: one DuckDB `SELECT` with layered guardrails — DuckDB's
+  own parser must classify it as a single SELECT, the connection is read-only, external
+  access is disabled (a `SELECT * FROM read_csv('/etc/passwd')` parses as SELECT but is
+  refused), and results are capped with a timeout.
+- **`search_reviews`** for opinions: hybrid search over 31k review passages — BM25 (DuckDB
+  FTS) plus bge-small embeddings (ONNX Runtime, no PyTorch), merged with reciprocal rank
+  fusion. Answers cite passages as [R1], [R2]; the app lists only the cited sources.
+
+The model is any OpenAI-compatible endpoint (default: Groq's free tier,
+`openai/gpt-oss-120b`). Tool errors and provider-rejected tool calls go back to the model so
+it can correct itself; every step is shown under "How I got this".
+
+**Evaluation** (`python -m imdb_insights.assistant eval`, [`reports/assistant_eval.md`](reports/assistant_eval.md)):
+21 cases — facts graded against reference SQL run on the live warehouse, opinions graded on
+valid citations from the right movie, and safety cases (off-topic, destructive request,
+prompt injection).
+
+| model (Groq free tier) | passed | median latency | tokens / question |
+|---|---|---|---|
+| openai/gpt-oss-120b | 21/21 | 3.3 s | ~2,000 |
+| qwen/qwen3.8-27b | 21/21 | 18.4 s | ~2,400 |
+
+Both models saturate this set, so its next version needs harder cases (multi-step questions,
+ambiguous titles, unanswerable questions). Grading bugs it surfaced, now fixed: GPT-OSS writes
+citations with zero-width spaces (`[\u200bR2\u200b]`) or CJK brackets (`【R1】`).
+
 ## Why APIs, not scraping
 
 - IMDb returns `403 Forbidden` to automated browsers and requires sign-in for more than five
@@ -155,7 +186,8 @@ uv run python -m imdb_insights.reviews evaluate          # writes reports/review
 - [x] Deployment pipeline: daily refresh via GitHub Actions, private Hugging Face storage
 - [x] Review rating prediction: TF-IDF vs embeddings vs fine-tuned transformer vs local LLM,
       with leakage checks, out-of-domain testing and bootstrap confidence intervals
-- [ ] AI assistant: text-to-SQL over the warehouse + retrieval over reviews, with citations
+- [x] AI assistant: text-to-SQL over the warehouse + hybrid retrieval over reviews, with
+      citations, guardrails and an evaluation set
 - [ ] LLMOps: tracing, evaluation sets, prompt versioning; Docker; MCP server
 
 ## Credits
