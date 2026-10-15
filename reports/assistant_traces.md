@@ -19,6 +19,6 @@
 
 | tool | error | n |
 |---|---|---|
+| run_sql | BinderException: Binder Error: Referenced table "m" not found! Candidate tables: "d" LINE 8: SELECT d.person_id, COUNT(* | 1 |
 | run_sql | BinderException: Binder Error: Referenced table "p" not found! Candidate tables: "people" LINE 1: SELECT * FROM (SELECT  | 1 |
 | run_sql | BinderException: Binder Error: Table "c" does not have a column named "role" Candidate bindings: : "credit_type", "job"  | 1 |
-| run_sql | BinderException: Binder Error: Referenced table "m" not found! Candidate tables: "d" LINE 8: SELECT d.person_id, COUNT(* | 1 |

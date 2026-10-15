@@ -188,7 +188,8 @@ citations with zero-width spaces (`[\u200bR2\u200b]`) or CJK brackets (`【R1】
       with leakage checks, out-of-domain testing and bootstrap confidence intervals
 - [x] AI assistant: text-to-SQL over the warehouse + hybrid retrieval over reviews, with
       citations, guardrails and an evaluation set
-- [ ] LLMOps: tracing, evaluation sets, prompt versioning; Docker; MCP server
+- [x] LLMOps: tracing, prompt versioning, a harder evaluation set with repeated runs;
+      MCP server; Docker image built and smoke-tested in CI
 
 ## Credits
 
