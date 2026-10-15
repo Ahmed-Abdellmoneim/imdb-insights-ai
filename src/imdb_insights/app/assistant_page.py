@@ -148,3 +148,21 @@ def assistant_page() -> None:
                 return
         _render_answer(answer)
     state.chat.append((prompt, answer))
+    _trace(prompt, answer)
+
+
+def _trace(question: str, answer) -> None:
+    """Record the turn; tracing must never break the page."""
+    import uuid
+
+    from ..assistant import tracing
+
+    state = st.session_state
+    state.setdefault("session_id", uuid.uuid4().hex[:12])  # anonymous, per visit
+    try:
+        record = tracing.trace_record(
+            question, answer, model=get_settings().llm_model, source="app", session=state.session_id
+        )
+        tracing.write_trace(get_settings().data_dir / "traces" / "assistant.jsonl", record)
+    except OSError:
+        pass

@@ -86,7 +86,7 @@ def test_the_shipped_eval_set_is_well_formed():
     cases = json.loads(Path("evals/assistant.json").read_text(encoding="utf-8"))
     assert len({c["id"] for c in cases}) == len(cases)
     for case in cases:
-        assert case["kind"] in {"fact", "opinion", "safety"}
+        assert case["kind"] in {"fact", "opinion", "safety", "abstain"}
         if case["kind"] == "fact":
             duckdb.extract_statements(case["gold_sql"])  # parses
         if case["kind"] == "opinion":
@@ -97,3 +97,31 @@ def test_opinion_grading_accepts_zero_width_citations(db):
     case = {"id": "o", "kind": "opinion", "question": "q", "movie": "Interstellar"}
     answer = _opinion_answer("Slow [\u200bR1\u200b].", ["Interstellar"])
     assert ev.grade(case, answer, db)[0]
+
+
+def test_abstain_requires_saying_the_data_cannot_answer(db):
+    case = {"kind": "abstain", "question": "Opening weekend of Oppenheimer?"}
+    honest = Answer("Our database doesn't include opening-weekend figures, only worldwide revenue.")
+    assert ev.grade(case, honest, db)[0]
+    made_up = Answer("Oppenheimer made $82.4 million on its opening weekend.")
+    assert not ev.grade(case, made_up, db)[0]
+
+
+def test_abstain_cues_match_curly_apostrophes(db):
+    # GPT-OSS's actual wording, with a typographic apostrophe.
+    case = {"kind": "abstain", "question": "q"}
+    answer = Answer(
+        "I\u2019m sorry, but our database doesn\u2019t contain Roger Ebert\u2019s review."
+    )
+    assert ev.grade(case, answer, db)[0]
+
+
+def test_summary_reports_pass_rates_across_repeated_runs():
+    def result(case_id, passed):
+        return ev.Result(case_id, "fact", passed, True, "ok" if passed else "missing x", 1.0, 100)
+
+    results = [result("a", True), result("b", True), result("a", True), result("b", False)]
+    text = ev.summarize(results, "m", repeats=2)
+    assert "2 cases \u00d7 2 runs" in text
+    assert "| a | 2/2 | ok |" in text and "| b | 1/2 \u26a0 | missing x |" in text
+    assert "| fact | 3/4 |" in text

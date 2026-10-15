@@ -9,6 +9,7 @@ recorded in a trace (tool, arguments, latency, errors, token usage).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -96,6 +97,12 @@ TOOLS = [
         },
     },
 ]
+
+# Fingerprint of everything that shapes the model's behaviour apart from the model itself.
+# Recorded with every trace and evaluation, so results can be tied to the exact prompt.
+PROMPT_VERSION = hashlib.sha256(
+    (SYSTEM_PROMPT + json.dumps(TOOLS, sort_keys=True)).encode("utf-8")
+).hexdigest()[:10]
 
 
 @dataclass
