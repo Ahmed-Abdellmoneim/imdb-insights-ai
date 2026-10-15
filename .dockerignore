@@ -1,0 +1,15 @@
+# Secrets and local state must never enter the image.
+.env
+.env.*
+!.env.example
+data/
+.venv/
+.git/
+.github/
+.devcontainer/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+tests/
+reports/
+evals/

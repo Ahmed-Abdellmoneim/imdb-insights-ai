@@ -22,3 +22,26 @@ jobs:
         run: |
           uv export --locked --no-dev --no-hashes --format requirements-txt -o requirements.txt
           git diff --exit-code requirements.txt
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the image
+        run: docker build -t imdb-insights:ci .
+      - name: The app starts and reports healthy
+        run: |
+          docker run -d --name app -p 8501:8501 imdb-insights:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8501/_stcore/health; then echo; exit 0; fi
+            sleep 2
+          done
+          docker logs app
+          exit 1
+      - name: Runs as non-root, contains no secrets, MCP server imports
+        run: |
+          test "$(docker run --rm imdb-insights:ci id -u)" != "0"
+          docker run --rm imdb-insights:ci sh -c '! ls -a /app | grep -qx ".env"'
+          docker run --rm imdb-insights:ci python -c "import imdb_insights.mcp_server"
+      - name: Image size
+        run: docker image ls imdb-insights:ci --format '{{.Size}}'
