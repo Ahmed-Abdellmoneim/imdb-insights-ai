@@ -383,3 +383,19 @@ def about_page() -> None:
         "This product uses the TMDB API but is not endorsed or certified by TMDB. "
         "IMDb ratings via OMDb. Not affiliated with IMDb."
     )
+    if version := _code_version():
+        st.caption(f"App version {version}")
+
+
+@st.cache_resource
+def _code_version() -> str | None:
+    """The deployed git commit (hosts like Streamlit Cloud run from a git checkout)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "log", "-1", "--format=%h %cs"], capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout.strip() or None

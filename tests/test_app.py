@@ -95,3 +95,13 @@ def test_streamlit_secrets_reach_the_settings(tmp_path, monkeypatch):
     at.secrets["groq"] = "gsk_from_secrets"
     at.run()
     assert get_settings().llm_api_key.get_secret_value() == "gsk_from_secrets"
+
+
+def test_ask_page_lists_secret_names_but_never_values():
+    at = AppTest.from_function(_ask_page_script, default_timeout=30)
+    at.secrets["HF_TOKEN"] = "hf_secret_value"
+    at.secrets["llm"] = {"key": "gsk_secret_value"}  # nested: not read
+    at.run()
+    hint = at.caption[-1].value
+    assert "HF_TOKEN" in hint and "[llm] key" in hint
+    assert "secret_value" not in hint

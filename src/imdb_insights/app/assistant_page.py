@@ -37,6 +37,20 @@ def _client():
     )
 
 
+def _secrets_hint() -> str | None:
+    """Names (never values) of the configured secrets, to diagnose a missing key."""
+    try:
+        secrets = dict(st.secrets)
+    except (FileNotFoundError, st.errors.StreamlitSecretNotFoundError):
+        return None
+    top = sorted(k for k, v in secrets.items() if isinstance(v, str))
+    nested = sorted(f"[{k}] {', '.join(v)}" for k, v in secrets.items() if hasattr(v, "keys"))
+    hint = f"Secrets found: {', '.join(top) or 'none'}."
+    if nested:
+        hint += f" Inside sections (not read): {'; '.join(nested)}. Put the key at the top level."
+    return hint + " Accepted names: LLM_API_KEY, GROQ_API_KEY, groq."
+
+
 def _render_answer(answer) -> None:
     st.markdown(answer.text)
     from ..assistant.agent import cited_labels
@@ -78,6 +92,8 @@ def assistant_page() -> None:
             "`LLM_API_KEY` in `.env` (or in the app's secrets).",
             icon=":material/key:",
         )
+        if hint := _secrets_hint():
+            st.caption(hint)
         return
 
     from ..assistant.agent import Agent
