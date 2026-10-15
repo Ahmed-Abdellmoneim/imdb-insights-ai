@@ -389,13 +389,23 @@ def about_page() -> None:
 
 @st.cache_resource
 def _code_version() -> str | None:
-    """The deployed git commit (hosts like Streamlit Cloud run from a git checkout)."""
-    import subprocess
+    """The deployed git commit, read from the checkout's .git folder (no git binary needed)."""
+    from pathlib import Path
 
-    try:
-        out = subprocess.run(
-            ["git", "log", "-1", "--format=%h %cs"], capture_output=True, text=True, timeout=5
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    for folder in (Path.cwd(), *Path(__file__).resolve().parents):
+        git = folder / ".git"
+        if not (git / "HEAD").is_file():
+            continue
+        head = (git / "HEAD").read_text(encoding="utf-8").strip()
+        if not head.startswith("ref: "):
+            return head[:7]  # detached HEAD: the commit itself
+        ref = head[5:]
+        if (git / ref).is_file():
+            return (git / ref).read_text(encoding="utf-8").strip()[:7]
+        packed = git / "packed-refs"
+        if packed.is_file():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                if line.endswith(" " + ref):
+                    return line[:7]
         return None
-    return out.stdout.strip() or None
+    return None

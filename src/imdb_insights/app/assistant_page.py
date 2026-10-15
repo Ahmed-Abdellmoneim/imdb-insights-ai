@@ -37,17 +37,24 @@ def _client():
     )
 
 
-def _secrets_hint() -> str | None:
-    """Names (never values) of the configured secrets, to diagnose a missing key."""
+def _secrets_hint() -> str:
+    """Names (never values) of what is configured, to diagnose a missing key."""
+    import os
+
     try:
         secrets = dict(st.secrets)
-    except (FileNotFoundError, st.errors.StreamlitSecretNotFoundError):
-        return None
-    top = sorted(k for k, v in secrets.items() if isinstance(v, str))
-    nested = sorted(f"[{k}] {', '.join(v)}" for k, v in secrets.items() if hasattr(v, "keys"))
-    hint = f"Secrets found: {', '.join(top) or 'none'}."
-    if nested:
-        hint += f" Inside sections (not read): {'; '.join(nested)}. Put the key at the top level."
+        top = sorted(k for k, v in secrets.items() if isinstance(v, str))
+        nested = sorted(f"[{k}] {', '.join(v)}" for k, v in secrets.items() if hasattr(v, "keys"))
+        hint = f"Secrets found: {', '.join(top) or 'none'}."
+        if nested:
+            hint += f" Inside sections (not read): {'; '.join(nested)}. Use the top level."
+    except Exception as exc:  # noqa: BLE001 - diagnostic only; report the type, never contents
+        hint = (
+            f"The secrets could not be read ({type(exc).__name__}); check that they are "
+            'valid TOML, with quotes around values: groq = "gsk_...".'
+        )
+    candidates = sorted(k for k in os.environ if any(w in k.lower() for w in ("groq", "llm")))
+    hint += f" Environment variables that look relevant: {', '.join(candidates) or 'none'}."
     return hint + " Accepted names: LLM_API_KEY, GROQ_API_KEY, groq."
 
 
@@ -92,8 +99,7 @@ def assistant_page() -> None:
             "`LLM_API_KEY` in `.env` (or in the app's secrets).",
             icon=":material/key:",
         )
-        if hint := _secrets_hint():
-            st.caption(hint)
+        st.caption(_secrets_hint())
         return
 
     from ..assistant.agent import Agent
@@ -125,16 +131,20 @@ def assistant_page() -> None:
     st.chat_message("user").markdown(prompt)
     history = []
     for question, answer in state.chat[-HISTORY_MESSAGES // 2 :]:
-        history += [{"role": "user", "content": question},
-                    {"role": "assistant", "content": answer.text}]  # fmt: skip
+        history += [
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": answer.text},
+        ]
     agent = Agent(_client(), settings.llm_model, data.database_path(), _embedder())
     with st.chat_message("assistant"):
         with st.spinner("Thinking…"):
             try:
                 answer = agent.ask(prompt, history=history)
             except Exception as exc:  # noqa: BLE001 - surface provider errors (rate limits) kindly
-                st.error(f"The language model is unavailable right now ({type(exc).__name__}). "
-                         "Please try again in a minute.")  # fmt: skip
+                st.error(
+                    f"The language model is unavailable right now ({type(exc).__name__}). "
+                    "Please try again in a minute."
+                )
                 return
         _render_answer(answer)
     state.chat.append((prompt, answer))
