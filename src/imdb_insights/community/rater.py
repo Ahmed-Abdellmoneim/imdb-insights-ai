@@ -22,7 +22,7 @@ HEAD_PATH = Path(__file__).with_name("rating_head.json")
 def save_head(head: dict, path: Path = HEAD_PATH) -> Path:
     if len(head["coef"]) != DIMENSIONS:
         raise ValueError(f"Expected {DIMENSIONS} weights, got {len(head['coef'])}")
-    path.write_text(json.dumps(head, indent=1) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(head, indent=1) + "\n", encoding="utf-8", newline="\n")
     return path
 
 
@@ -30,16 +30,17 @@ def save_head(head: dict, path: Path = HEAD_PATH) -> Path:
 class RatingHead:
     coef: np.ndarray
     intercept: float
-    version: str  # hash of the head file, recorded with every prediction
+    version: str  # hash of the head's contents, recorded with every prediction
 
     @classmethod
     def load(cls, path: Path = HEAD_PATH) -> RatingHead:
-        raw = path.read_bytes()
-        head = json.loads(raw)
+        head = json.loads(path.read_text(encoding="utf-8"))
+        # Hash the parsed numbers, not the bytes, so line endings cannot change the version.
+        canonical = json.dumps(head, sort_keys=True, separators=(",", ":")).encode()
         return cls(
             coef=np.asarray(head["coef"], dtype=np.float32),
             intercept=float(head["intercept"]),
-            version=hashlib.sha256(raw).hexdigest()[:10],
+            version=hashlib.sha256(canonical).hexdigest()[:10],
         )
 
     def predict(self, embeddings: np.ndarray) -> np.ndarray:

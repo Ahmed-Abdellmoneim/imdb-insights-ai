@@ -102,6 +102,9 @@ def test_rating_head_round_trip_and_clipping(tmp_path):
     embeddings[1, 0], embeddings[2, 0] = 1.0, -1.0
     assert head.predict(embeddings).tolist() == [5.5, 10.0, 1.0]
     assert len(head.version) == 10
+    crlf = tmp_path / "crlf.json"
+    crlf.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))  # a Windows checkout
+    assert rater.RatingHead.load(crlf).version == head.version
     with pytest.raises(ValueError):
         rater.save_head({"coef": [1.0], "intercept": 0}, path)
 
