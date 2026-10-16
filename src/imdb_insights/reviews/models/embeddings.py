@@ -50,3 +50,13 @@ class EmbeddingRidge:
 
     def predict(self, texts: list[str]) -> np.ndarray:
         return self.model.predict(self.embed(texts))
+
+    def head(self) -> dict:
+        """The ridge head as plain numbers: with the app's ONNX encoder (same model, same
+        CLS pooling), this is the whole rating model, small enough to ship with the code."""
+        return {
+            "encoder": ENCODER,
+            "alpha": float(self.model.alpha),
+            "intercept": round(float(self.model.intercept_), 6),
+            "coef": [round(float(c), 6) for c in self.model.coef_],
+        }

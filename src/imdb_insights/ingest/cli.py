@@ -73,6 +73,9 @@ def ingest(
         omdb_max_age=timedelta(days=omdb_max_age_days),
     )
     tables, report = asyncio.run(_run(settings, data_dir, options, started))
+    tables["reviews"], report["community_reviews"] = _with_community(
+        tables["reviews"], tables["movies"]
+    )
     tables["review_chunks"] = (
         _review_chunks(tables["reviews"], data_dir) if search_index else pd.DataFrame()
     )
@@ -93,6 +96,27 @@ def ingest(
     if not report["complete"]:
         # Distinct exit code so schedulers can tell "partial, resume later" from a crash.
         raise typer.Exit(code=3)
+
+
+def _with_community(reviews: pd.DataFrame, movies: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Add the approved reviews written in the app (see ``imdb_insights.community``).
+
+    If they cannot be fetched, the refresh carries on with TMDB reviews only.
+    """
+    from ..community.cli import open_store
+    from ..community.submissions import approved_reviews, latest
+
+    try:
+        submissions, decisions = open_store().load()
+    except Exception as exc:  # noqa: BLE001 - optional source; never fail the refresh
+        console.print(f"[yellow]warning:[/yellow] community reviews skipped ({exc})")
+        return reviews, 0
+    community = approved_reviews(submissions, latest(decisions))
+    community = community[community["tmdb_id"].isin(movies["tmdb_id"])]
+    if community.empty:
+        return reviews, 0
+    console.print(f"Community reviews: {len(community)} approved")
+    return pd.concat([reviews, community], ignore_index=True), len(community)
 
 
 def _review_chunks(reviews: pd.DataFrame, data_dir: Path) -> pd.DataFrame:

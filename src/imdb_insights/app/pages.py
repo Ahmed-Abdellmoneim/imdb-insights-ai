@@ -9,6 +9,7 @@ from . import charts, data
 
 IMDB_TITLE_URL = "https://www.imdb.com/title/{}/"
 TMDB_MOVIE_URL = "https://www.themoviedb.org/movie/{}"
+PAGES: dict[str, st.Page] = {}  # filled in by main.py, for links between pages
 
 
 def _fmt_int(value) -> str:
@@ -189,12 +190,20 @@ def movie_page() -> None:
 
     reviews = data.reviews(tmdb_id)
     st.subheader(f"Reviews ({len(reviews)})")
+    if "write" in PAGES:
+        st.page_link(
+            PAGES["write"],
+            label="Write your own review",
+            icon=":material/rate_review:",
+            query_params={"id": str(tmdb_id)},
+        )
     if reviews.empty:
-        st.caption("No TMDB reviews for this movie yet.")
+        st.caption("No reviews for this movie yet.")
     for r in reviews.itertuples():
         rating = f" · {r.rating:g}/10" if pd.notna(r.rating) else ""
         date = r.created_at.date().isoformat() if pd.notna(r.created_at) else ""
-        with st.expander(f"{r.author or 'Anonymous'}{rating} · {date}"):
+        where = " · written here" if r.source == "community" else ""
+        with st.expander(f"{r.author or 'Anonymous'}{rating} · {date}{where}"):
             st.write(r.content)
             if r.url:
                 st.markdown(f"[Read on TMDB]({r.url})")

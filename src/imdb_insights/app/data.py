@@ -179,7 +179,7 @@ def reviews(tmdb_id: int) -> pd.DataFrame:
     return _none_for_missing(
         query(
             """
-            select author, rating, content, created_at, url
+            select source, author, rating, content, created_at, url
             from reviews where tmdb_id = ? order by created_at desc
             """,
             [tmdb_id],

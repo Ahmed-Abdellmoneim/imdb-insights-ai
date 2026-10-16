@@ -9,6 +9,7 @@ import streamlit as st
 from ..config import get_settings
 from . import data, pages
 from .assistant_page import assistant_page
+from .review_page import review_page
 
 
 def _export_secrets() -> None:
@@ -38,6 +39,10 @@ def main() -> None:
         )
         st.stop()
 
+    # Kept in pages.PAGES so other pages can link to it.
+    pages.PAGES["write"] = st.Page(
+        review_page, title="Write a review", icon=":material/rate_review:", url_path="write"
+    )
     nav = st.navigation(
         [
             st.Page(
@@ -55,6 +60,7 @@ def main() -> None:
                 url_path="insights",
             ),
             st.Page(assistant_page, title="Ask", icon=":material/forum:", url_path="ask"),
+            pages.PAGES["write"],
             st.Page(
                 pages.about_page, title="About the data", icon=":material/info:", url_path="about"
             ),

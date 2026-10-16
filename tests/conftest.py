@@ -25,6 +25,8 @@ def no_real_credentials(monkeypatch):
         "OMDB_API_KEY",
         "HF_TOKEN",
         "HF_DATASET_REPO",
+        "HF_COMMUNITY_REPO",
+        "HF_COMMUNITY_TOKEN",
         "LLM_API_KEY",
         "GROQ_API_KEY",
         "GROQ",

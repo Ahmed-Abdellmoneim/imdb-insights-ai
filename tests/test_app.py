@@ -105,3 +105,61 @@ def test_ask_page_lists_secret_names_but_never_values():
     hint = at.caption[-1].value
     assert "HF_TOKEN" in hint and "[llm] key" in hint
     assert "secret_value" not in hint
+
+
+def _write_page_script() -> None:
+    from imdb_insights.app.review_page import review_page
+
+    review_page()
+
+
+REVIEW = (
+    "A patient, beautifully shot drama that earns every minute of its running time. The lead "
+    "performance carries the quieter middle section, and the score never tells you what to "
+    "feel. The ending lands because the film has been honest with its characters throughout."
+)
+
+
+def _fill(at, text=REVIEW, rating=8, consent=True):
+    at.selectbox[0].set_value(7)
+    at.button_group[0].set_value(rating)
+    at.text_area[0].input(text)
+    at.checkbox[0].set_value(consent)
+    at.button[0].click()
+    return at.run()
+
+
+def test_write_page_saves_a_review_and_shows_the_model_guess(monkeypatch, warehouse):
+    from imdb_insights.community.store import LocalStore
+
+    monkeypatch.setattr("imdb_insights.app.review_page._guess", lambda text: (6.5, "test"))
+    at = AppTest.from_function(_write_page_script, default_timeout=30).run()
+    assert not at.exception
+    at = _fill(at)
+    assert not at.exception, at.exception
+    assert "Thank you" in at.success[0].value
+    assert [m.value for m in at.metric] == ["8/10", "6.5/10"]
+    submissions, _ = LocalStore(warehouse / "community" / "local").load()
+    saved = [s for s in submissions if s.text == REVIEW][-1]
+    assert (saved.tmdb_id, saved.rating, saved.model_rating) == (7, 8, 6.5)
+    assert at.text_area[0].value == ""  # a fresh form for the next review
+
+    at = _fill(at)  # the same text again
+    assert "already submitted" in at.error[0].value
+
+
+def test_write_page_refuses_short_reviews_without_consent(monkeypatch):
+    monkeypatch.setattr("imdb_insights.app.review_page._guess", lambda text: (None, None))
+    at = _fill(AppTest.from_function(_write_page_script, default_timeout=30).run(),
+               text="Great!", consent=False)  # fmt: skip
+    errors = " ".join(e.value for e in at.error)
+    assert "at least 150 characters" in errors and "consent" in errors
+    assert not at.success
+
+
+def test_write_page_is_off_when_deployed_without_a_community_dataset(monkeypatch):
+    monkeypatch.setenv("HF_DATASET_REPO", "someone/data")
+    get_settings.cache_clear()
+    at = AppTest.from_function(_write_page_script, default_timeout=30).run()
+    assert "not switched on" in at.info[0].value
+    assert not at.text_area

@@ -36,8 +36,8 @@ DuckDB tables (one row per ...):
   department, job (e.g. 'Director', 'Screenplay', 'Original Music Composer'),
   character, billing (cast order starting at 0: the lead is billing = 0, so the
   "top five billed" are billing < 5; NULL for crew)
-- reviews (user review): review_id, tmdb_id, author, rating (1-10, may be NULL), content,
-  created_at, url
+- reviews (user review): review_id, tmdb_id, source ('tmdb', or 'community' for reviews
+  written in this app), author, rating (1-10, may be NULL), content, created_at, url
 Notes: "the Top 250" means movies WHERE rank IS NOT NULL. Use ILIKE for name matching.
 List columns: use list_contains(countries, 'Japan') or unnest(...).
 Division: in DuckDB "/" always returns a decimal; use "//" for integer division

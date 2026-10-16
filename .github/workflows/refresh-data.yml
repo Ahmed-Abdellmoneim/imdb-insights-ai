@@ -24,6 +24,9 @@ jobs:
       OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ${{ vars.HF_DATASET_REPO }}
+      # Approved reviews written in the app (optional; skipped when not configured).
+      HF_COMMUNITY_REPO: ${{ vars.HF_COMMUNITY_REPO }}
+      HF_COMMUNITY_TOKEN: ${{ secrets.HF_COMMUNITY_TOKEN }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.0

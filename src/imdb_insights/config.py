@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     # Private Hugging Face dataset that stores the published warehouse and the API cache.
     hf_dataset_repo: str | None = None
     hf_token: SecretStr | None = None
+    # Private dataset for reviews written in the app. The deployed app needs a token that can
+    # write to it (and only to it); without one, HF_TOKEN is used.
+    hf_community_repo: str | None = None
+    hf_community_token: SecretStr | None = None
     # Assistant LLM: any OpenAI-compatible endpoint. Defaults to Groq's free tier; also works
     # with Gemini's OpenAI endpoint, OpenRouter, or a local Ollama (http://localhost:11434/v1).
     llm_base_url: str = "https://api.groq.com/openai/v1"
@@ -30,7 +34,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "omdb_api_key", "tmdb_api_key", "hf_token", "hf_dataset_repo", "llm_api_key",
-        "groq_api_key", "groq", mode="before",
+        "groq_api_key", "groq", "hf_community_repo", "hf_community_token", mode="before",
     )  # fmt: skip
     @classmethod
     def _clean(cls, value: object) -> object:
@@ -47,6 +51,8 @@ class Settings(BaseSettings):
     def _llm_key_fallbacks(self) -> Settings:
         if self.llm_api_key is None:
             self.llm_api_key = self.groq_api_key or self.groq
+        if self.hf_community_token is None:
+            self.hf_community_token = self.hf_token
         return self
 
 

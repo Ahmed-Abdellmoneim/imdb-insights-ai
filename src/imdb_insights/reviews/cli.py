@@ -23,6 +23,7 @@ from . import data, metrics
 app = typer.Typer(add_completion=False, help="Review rating models (step 3).")
 
 REPORT_DIR = Path("reports")
+TRAINED_ON = "Stanford Large Movie Review Dataset, train split (movie-grouped validation held out)"
 EVAL_SETS = {
     "validation": "Stanford validation (movie-grouped slice of train)",
     "test": "Stanford test, official (25,000 reviews)",
@@ -99,6 +100,12 @@ def train(
     info = model.fit(splits[splits["split"] == "train"], splits[splits["split"] == "validation"])
     if hasattr(model, "top_terms"):
         info["top_terms"] = model.top_terms()
+    if hasattr(model, "head"):
+        from ..community.rater import save_head
+
+        mae = info["validation_mae_by_alpha"][info["alpha"]]
+        path = save_head(model.head() | {"validation_mae": mae, "trained_on": TRAINED_ON})
+        typer.echo(f"Saved the rating head used by the app to {path}")
 
     rows = splits[splits["split"] != "train"]
     preds = pd.DataFrame(

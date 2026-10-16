@@ -107,7 +107,7 @@ def load_tmdb(db_path: Path) -> pd.DataFrame:
             """
             select r.review_id, m.imdb_id, r.content as text, r.rating
             from reviews r join movies m using (tmdb_id)
-            where r.rating is not null and length(r.content) >= 50
+            where r.source = 'tmdb' and r.rating is not null and length(r.content) >= 50
             """
         ).df()
     df["text"] = df["text"].map(clean_text)

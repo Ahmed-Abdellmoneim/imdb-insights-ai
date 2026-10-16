@@ -2,7 +2,8 @@
 
 An end-to-end data and AI project around the best-rated movies of all time: a resumable,
 API-based ingestion pipeline, an analytical DuckDB warehouse, an IMDb-style Top 250 we compute
-ourselves, and (in progress) NLP over reviews and an AI assistant.
+ourselves, review rating models, first-party reviews collected and moderated in the app,
+and an AI assistant with evaluation, tracing and an MCP server.
 
 > **v2** of [IMDb-Top-250-Scraper-Review](https://github.com/Ahmed-Abdellmoneim/IMDb-Top-250-Scraper-Review)
 > (2024). IMDb has since blocked automated browsers and put reviews behind sign-in, so v2
@@ -41,7 +42,7 @@ TMDB discover ──► candidates (rating ≥ 6.9 with ≥ 250 votes, plus ≥ 
 | `movie_keywords` | movie × keyword | |
 | `people` | one row per person | name, gender, profile image |
 | `credits` | movie × person × role | cast (character, billing) and crew (department, job) |
-| `reviews` | one row per review | text, reviewer rating, date (TMDB) |
+| `reviews` | one row per review | text, reviewer rating, date; `source` is `tmdb` or `community` (written in the app) |
 
 ## Quick start
 
@@ -156,6 +157,38 @@ The model is any OpenAI-compatible endpoint (default: Groq's free tier,
 `openai/gpt-oss-120b`). Tool errors and provider-rejected tool calls go back to the model so
 it can correct itself; every step is shown under "How I got this".
 
+## Community reviews (first-party data)
+
+IMDb's reviews are behind sign-in and TMDB has only a few per movie, so the app collects its
+own: the **Write a review** page (linked from every movie) asks for a 1–10 rating, the review
+and explicit consent (CC BY 4.0). Nothing is shown until a person has read it.
+
+```
+Write a review ──► checks ──► private HF dataset ──► manual moderation ──► daily refresh
+  (rating first,     (length,    (one JSON file per    (approve / reject      (reviews table,
+   then the model's   links,      submission, so no     with a reason,         assistant search,
+   guess is shown)    contacts)   restart loses data)   copy detection)        model evaluation)
+```
+
+- **Validation vs flags.** Hard rules (length, word count) are enforced in the form; softer
+  signals (links, e-mail addresses, phone numbers, shouting, repetition) are only *flags* that
+  tell the moderator where to look. Text that shares many 8-word sequences with another
+  submission or a TMDB review of the same movie is marked as a possible copy.
+- **Manual moderation** — `python -m imdb_insights.community moderate` shows each pending
+  review with its flags and records approve/reject decisions (one commit per session).
+  `status` counts the queue.
+- **Privacy.** No accounts, e-mail or IP addresses: only an optional display name and a random
+  per-visit id to spot floods (plus a limit of three submissions an hour per visit).
+- **A live test set for the step 3 model.** The embedding model now runs in the app without
+  PyTorch: the same bge-small ONNX encoder as the assistant, plus a 384-weight ridge head
+  shipped as JSON ([`rating_head.json`](src/imdb_insights/community/rating_head.json)). It
+  predicts the rating from the text *after* the writer has chosen theirs, so the guess cannot
+  anchor the label. `python -m imdb_insights.community evaluate` scores it on approved reviews
+  per model version ([`reports/community_reviews.md`](reports/community_reviews.md)).
+- **Everywhere downstream.** Approved reviews join the `reviews` table with
+  `source = 'community'`, so they show on movie pages and are searchable and citable by the
+  assistant and the MCP server.
+
 ## Evaluation, tracing and prompt versioning
 
 **Evaluation** — `python -m imdb_insights.assistant eval [--repeat N]`, report in
@@ -262,6 +295,8 @@ server imports.
       citations, guardrails and an evaluation set
 - [x] LLMOps: tracing, prompt versioning, a harder evaluation set with repeated runs;
       MCP server; Docker image built and smoke-tested in CI
+- [x] First-party data: reviews written in the app, moderated by hand, used as a live
+      test set for the rating model
 
 ## Credits
 
