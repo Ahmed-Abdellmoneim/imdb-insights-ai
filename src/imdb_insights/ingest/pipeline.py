@@ -90,6 +90,8 @@ class Collection:
     omdb_stopped: str | None = None
     # Entries served from an expired cache because a refresh was not possible this run.
     stale: list[str] = field(default_factory=list)
+    # Languages searched with their own, lower floors (see ``LanguageTier``).
+    language_tier: LanguageTier | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,30 @@ class LowVoteTier:
     min_votes: int
 
 
+@dataclass(frozen=True)
+class LanguageTier:
+    """Extra candidates in languages whose films are rated far more on IMDb than on TMDB.
+
+    In the 2026-11 warehouse, ranked Hindi, Tamil, Kannada, Telugu, Bengali and Turkish films
+    had 200-900 IMDb votes per TMDB vote and IMDb ratings up to 1.5 points above TMDB's, so
+    such a film can rank with a TMDB rating and vote count well below the main floors. For
+    other languages the gap was at most 0.6 points, so the main floors keep a wide margin.
+    """
+
+    languages: tuple[str, ...]
+    min_rating: float
+    min_votes: int
+
+
+# Lowest IMDb rating in the Top 250 (8.0) minus the largest observed gap (1.5) and a margin;
+# 20 TMDB votes can already mean the 25,000 IMDb votes the ranking requires.
+HIGH_IMDB_SHARE_LANGUAGES = LanguageTier(
+    languages=("hi", "ta", "te", "kn", "ml", "bn", "mr", "pa", "ur", "tr", "fa"),
+    min_rating=6.3,
+    min_votes=20,
+)
+
+
 async def collect(
     tmdb: TmdbClient,
     omdb: OmdbClient,
@@ -112,6 +138,7 @@ async def collect(
     min_votes: int,
     snapshot: str,
     low_votes: LowVoteTier | None = None,
+    language_tier: LanguageTier | None = None,
 ) -> Collection:
     ids = await tmdb.discover_top_rated(
         min_rating=min_rating, min_votes=min_votes, snapshot=snapshot
@@ -132,9 +159,25 @@ async def collect(
             f"rated {low_votes.min_rating}+ with {low_votes.min_votes:,}–{min_votes - 1:,} "
             "TMDB votes"
         )
+    if language_tier:
+        ids += await tmdb.discover_top_rated(
+            min_rating=language_tier.min_rating,
+            min_votes=language_tier.min_votes,
+            languages=language_tier.languages,
+            snapshot=snapshot,
+        )
+        ids = list(dict.fromkeys(ids))
+        pools.append(
+            f"in {', '.join(language_tier.languages)}: rated {language_tier.min_rating}+ "
+            f"with {language_tier.min_votes:,}+ TMDB votes"
+        )
     log.info("Discovered %d candidate movies", len(ids))
     result = Collection(
-        candidate_ids=ids, min_rating=floor_rating, min_votes=floor_votes, pools=pools
+        candidate_ids=ids,
+        min_rating=floor_rating,
+        min_votes=floor_votes,
+        pools=pools,
+        language_tier=language_tier,
     )
 
     async def one_movie(tmdb_id: int) -> TmdbMovie | None:
@@ -274,8 +317,11 @@ def quality_report(col: Collection, tables: dict[str, pd.DataFrame]) -> dict[str
     """Checks that tell us whether the ranking can be trusted."""
     movies = tables["movies"]
     ranked = movies[movies["rank"].notna()]
-    lowest = float(ranked["tmdb_rating"].min()) if len(ranked) else None
-    fewest_votes = int(ranked["tmdb_votes"].min()) if len(ranked) else None
+    tier = col.language_tier
+    in_tier = ranked["original_language"].isin(tier.languages if tier else ())
+    general, tiered = ranked[~in_tier], ranked[in_tier]
+    lowest = float(general["tmdb_rating"].min()) if len(general) else None
+    fewest_votes = int(general["tmdb_votes"].min()) if len(general) else None
     warnings = []
     if len(ranked) < 250:
         warnings.append(f"only {len(ranked)} movies are eligible for the ranking")
@@ -297,6 +343,28 @@ def quality_report(col: Collection, tables: dict[str, pd.DataFrame]) -> dict[str
             f"a ranked movie has only {fewest_votes} TMDB votes, under {VOTE_MARGIN}x the "
             f"candidate floor {col.min_votes}; lower --min-votes to be sure none are missed"
         )
+    tier_report = None
+    if tier:
+        tier_lowest = float(tiered["tmdb_rating"].min()) if len(tiered) else None
+        tier_fewest = int(tiered["tmdb_votes"].min()) if len(tiered) else None
+        tier_report = {
+            "languages": list(tier.languages),
+            "min_tmdb_rating": tier.min_rating,
+            "min_tmdb_votes": tier.min_votes,
+            "ranked": len(tiered),
+            "lowest_tmdb_rating_in_ranking": tier_lowest,
+            "fewest_tmdb_votes_in_ranking": tier_fewest,
+        }
+        if tier_lowest is not None and tier_lowest - tier.min_rating < RATING_MARGIN:
+            warnings.append(
+                f"a ranked {'/'.join(tier.languages)} movie has TMDB rating {tier_lowest:.2f}, "
+                f"within {RATING_MARGIN} of that tier's floor {tier.min_rating}"
+            )
+        if tier_fewest is not None and tier_fewest < VOTE_MARGIN * tier.min_votes:
+            warnings.append(
+                f"a ranked {'/'.join(tier.languages)} movie has only {tier_fewest} TMDB votes, "
+                f"under {VOTE_MARGIN}x that tier's floor {tier.min_votes}"
+            )
     return {
         "candidates": len(col.candidate_ids),
         "ranked": len(ranked),
@@ -306,6 +374,7 @@ def quality_report(col: Collection, tables: dict[str, pd.DataFrame]) -> dict[str
         "candidate_min_tmdb_votes": col.min_votes,
         "lowest_tmdb_rating_in_ranking": lowest,
         "fewest_tmdb_votes_in_ranking": fewest_votes,
+        "language_tier": tier_report,
         "omdb_status": movies["omdb_status"].value_counts().to_dict(),
         "omdb_stopped": col.omdb_stopped,
         "stale_entries": len(col.stale),

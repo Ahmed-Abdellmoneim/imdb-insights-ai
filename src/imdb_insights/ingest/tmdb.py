@@ -225,13 +225,16 @@ class TmdbClient:
         max_votes: int | None = None,
         max_pages: int = 500,
         exclude_genres: Iterable[int] = (DOCUMENTARY, TV_MOVIE),
+        languages: Iterable[str] = (),
         snapshot: str | None = None,
     ) -> list[int]:
         """Return TMDB ids of every movie within the thresholds, best rated first.
 
+        ``languages`` (ISO 639-1 codes) limits the search to those original languages.
         ``snapshot`` (e.g. today's date) namespaces the cache, since rankings drift.
         TMDB serves at most 500 pages of 20 results.
         """
+        languages = tuple(languages)
         params = {
             "sort_by": "vote_average.desc",
             "vote_average.gte": min_rating,
@@ -242,8 +245,12 @@ class TmdbClient:
         }
         if max_votes is not None:
             params["vote_count.lte"] = max_votes
+        if languages:
+            params["with_original_language"] = "|".join(languages)
         excluded = "_".join(map(str, exclude_genres))  # no "|": it is invalid in Windows paths
         query = f"rating{min_rating}-votes{min_votes}-{max_votes or ''}-without{excluded}"
+        if languages:
+            query += "-lang" + "_".join(languages)
         ids: list[int] = []
         for page in range(1, max_pages + 1):
             data = await self.http.get_json(

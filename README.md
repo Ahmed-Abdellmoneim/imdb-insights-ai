@@ -12,7 +12,8 @@ and an AI assistant with evaluation, tracing and an MCP server.
 ## What it does today
 
 ```
-TMDB discover ──► candidates (rating ≥ 6.9 with ≥ 250 votes, plus ≥ 7.0 with 50–249 votes)
+TMDB discover ──► candidates (rating ≥ 6.9 with ≥ 250 votes, plus ≥ 7.0 with 50–249 votes,
+      │            plus Indian/Turkish/Persian films rated ≥ 6.3 with ≥ 20 votes)
       │
       ├─► TMDB /movie/{id}  details · cast & crew · keywords · reviews · IMDb id
       └─► OMDb ?i={imdb_id} IMDb rating & votes · Metascore · Rotten Tomatoes · awards
@@ -32,6 +33,12 @@ TMDB discover ──► candidates (rating ≥ 6.9 with ≥ 250 votes, plus ≥ 
   `WR = v/(v+m)·R + m/(v+m)·C` with `m = 25,000` votes and `C = 7.0`.
 - **Self-checks** in `manifest.json`: whether the run is complete, and whether the candidate
   pool was wide enough that no Top 250 movie could have been missed.
+- **A candidate pool designed from data.** TMDB is only the discovery step, so the pool must
+  include every film that could rank on IMDb. The self-checks flagged ranked films close to
+  the floors; all were Indian or Turkish, whose films get 200–900 IMDb votes per TMDB vote
+  and are rated up to 1.5 points higher on IMDb. A random pilot of 239 films just outside the
+  general floors found no contender, so those stay, and a language tier with its own floors
+  (8.0 − 1.5 − margin = 6.3; 20 votes) covers the films that behave differently.
 
 ### Data model (DuckDB: `data/processed/imdb_insights.duckdb`)
 

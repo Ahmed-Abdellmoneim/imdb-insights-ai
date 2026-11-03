@@ -216,6 +216,50 @@ def test_low_vote_tier_adds_candidates_and_lowers_the_reported_floors(tmp_path):
     assert (col.min_rating, col.min_votes) == (6.9, 50)
 
 
+def test_language_tier_searches_its_languages_with_its_own_floors(tmp_path):
+    queries = []
+
+    def tmdb(request):
+        if request.url.path.endswith("/discover/movie"):
+            queries.append(dict(request.url.params))
+            tier = "with_original_language" in request.url.params
+            ids = [{"id": 200}] if tier else [{"id": 1}, {"id": 2}]
+            return httpx.Response(200, json={"total_pages": 1, "results": ids})
+        response = fake_tmdb(request)
+        if request.url.path.endswith("/200"):  # a Tamil film with few TMDB votes
+            data = response.json() | {"original_language": "ta", "vote_average": 6.4,
+                                      "vote_count": 25}  # fmt: skip
+            return httpx.Response(200, json=data)
+        return response
+
+    handler, _ = omdb_handler(quota=1000)
+    tier = pipeline.LanguageTier(languages=("ta", "hi"), min_rating=6.3, min_votes=20)
+
+    async def run():
+        async with (
+            TmdbClient("t", tmp_path, transport=httpx.MockTransport(tmdb)) as t,
+            OmdbClient("k", tmp_path, transport=httpx.MockTransport(handler)) as o,
+        ):
+            t.http.min_interval = o.http.min_interval = 0
+            return await pipeline.collect(
+                t, o, min_rating=6.9, min_votes=250, snapshot="d", language_tier=tier
+            )
+
+    col = asyncio.run(run())
+    assert col.candidate_ids == [1, 2, 200]
+    query = next(q for q in queries if "with_original_language" in q)
+    assert (query["with_original_language"], query["vote_average.gte"],
+            query["vote_count.gte"]) == ("ta|hi", "6.3", "20")  # fmt: skip
+    # The general floors are unchanged by the tier...
+    assert (col.min_rating, col.min_votes) == (6.9, 250)
+    report = pipeline.quality_report(col, pipeline.build_tables(col))
+    # ...and the Tamil film is judged against the tier's floors: 6.4 is within 0.3 of 6.3.
+    assert report["language_tier"]["ranked"] == 1
+    assert report["language_tier"]["fewest_tmdb_votes_in_ranking"] == 25
+    assert any("tier's floor 6.3" in w for w in report["warnings"])
+    assert not any("candidate floor 6.9" in w for w in report["warnings"])
+
+
 def test_rewrite_swaps_in_a_fresh_database(tmp_path):
     col, _ = run_collect(tmp_path, omdb_quota=1000)
     tables = pipeline.build_tables(col)

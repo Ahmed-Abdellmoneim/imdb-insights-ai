@@ -29,6 +29,7 @@ class Options:
     min_rating: float
     min_votes: int
     low_votes: pipeline.LowVoteTier
+    language_tier: pipeline.LanguageTier | None
     tmdb_max_age: timedelta
     omdb_max_age: timedelta
 
@@ -43,6 +44,13 @@ def ingest(
     low_vote_min_votes: Annotated[
         int, typer.Option(help="Low-vote candidates: TMDB votes from this up to --min-votes.")
     ] = 50,
+    language_tier: Annotated[
+        bool,
+        typer.Option(
+            help="Also search Indian, Turkish and Persian films with lower floors "
+            "(their IMDb ratings and vote counts run far above TMDB's)."
+        ),
+    ] = True,
     tmdb_max_age_days: Annotated[
         float, typer.Option(help="Re-fetch TMDB details older than this (on average).")
     ] = 7,
@@ -69,6 +77,7 @@ def ingest(
         min_rating=min_rating,
         min_votes=min_votes,
         low_votes=pipeline.LowVoteTier(low_vote_min_rating, low_vote_min_votes),
+        language_tier=pipeline.HIGH_IMDB_SHARE_LANGUAGES if language_tier else None,
         tmdb_max_age=timedelta(days=tmdb_max_age_days),
         omdb_max_age=timedelta(days=omdb_max_age_days),
     )
@@ -147,6 +156,7 @@ async def _run(settings: Settings, data_dir: Path, options: Options, started: da
             min_rating=options.min_rating,
             min_votes=options.min_votes,
             low_votes=options.low_votes,
+            language_tier=options.language_tier,
             snapshot=started.date().isoformat(),
         )
         console.print(
