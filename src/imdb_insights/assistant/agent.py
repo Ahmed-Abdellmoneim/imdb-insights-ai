@@ -27,13 +27,18 @@ MAX_STEPS = 6
 # Zero-width characters some models put inside citations ("[\u200bR2\u200b]"); they would
 # break citation matching, copy-paste and search, and carry no meaning in an answer.
 _INVISIBLE = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
-# Square brackets, plus the CJK lenticular and full-width brackets GPT-OSS models often use.
-_CITATION = re.compile(r"[\[【［]\s*(R\d+)\s*[\]】］]")
+# Square brackets, plus the CJK lenticular and full-width brackets GPT-OSS models often use,
+# and parentheses ("(R2)"), which it also falls back to now and then.
+_CITATION = re.compile(r"[\[【［(]\s*(R\d+)\s*[\]】］)]")
+# A markdown table cell holding nothing but a label ("| R1 | ..."): GPT-OSS likes a
+# "Reviewer | Comment" table and drops the brackets there, whatever the prompt says.
+_TABLE_LABEL = re.compile(r"(?<=\|)[ \t]*(R\d+)[ \t]*(?=\|)")
 
 
 def clean_answer(text: str) -> str:
     """Remove invisible characters and normalize citations to the plain ``[R2]`` form."""
-    return _CITATION.sub(r"[\1]", _INVISIBLE.sub("", text))
+    text = _TABLE_LABEL.sub(r" [\1] ", _INVISIBLE.sub("", text))
+    return _CITATION.sub(r"[\1]", text)
 
 
 def _is_invalid_tool_call(exc: Exception) -> bool:
@@ -62,7 +67,8 @@ Tools:
 {sql.SCHEMA_GUIDE}
 Rules:
 - Base every factual claim on tool results; never invent numbers, titles or quotes.
-- When you use review passages, cite them inline like [R2]. Only cite labels you received.
+- When you use review passages, cite them inline like [R2]: always with the square brackets,
+  also inside tables and lists (a bare R2 is not a citation). Only cite labels you received.
 - If a tool returns an error, fix the call and try again. If the data cannot answer the
   question, say so plainly.
 - Politely decline requests unrelated to movies or to this data.

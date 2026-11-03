@@ -162,6 +162,15 @@ def test_citations_with_invisible_characters_are_normalized():
         "R5",
     }
     assert agent.clean_answer("Stunning\u3010R1\u3011") == "Stunning[R1]"
+    assert agent.clean_answer("Chilling (R6) and raw ( R2 ).") == "Chilling [R6] and raw [R2]."
+
+
+def test_bare_labels_in_table_cells_become_citations():
+    # GPT-OSS answers opinion questions with a "Reviewer | Comment" table of bare labels.
+    raw = "| Reviewer | Comment |\n|---|---|\n| R1 | \u201cConfusing.\u201d |\n|R12| Loved R2-D2 |"
+    cleaned = agent.clean_answer(raw)
+    assert "| [R1] | \u201cConfusing.\u201d |" in cleaned and "| [R12] |" in cleaned
+    assert agent.cited_labels(cleaned) == {"R1", "R12"}  # "R2-D2" in prose is untouched
 
 
 class ToolUseFailed(Exception):

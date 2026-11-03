@@ -225,6 +225,8 @@ How the loop paid off — each change below was found by the evaluation and diag
 | grader: curly apostrophes ("doesn’t") hid two correct abstentions | grader fix |
 | `7ac6bf699f` schema guide: DuckDB's `/` is decimal division and integer casts round, so `(year/10)::int*10` put 2015 in the 2020s | 31/32 |
 | `c27b9475a6` schema guide: `billing` is 0-based, so "top five billed" is `billing < 5` (the model had excluded every lead actor) | **32/32** |
+| `c67bae9f1b` first `--repeat 3` run: one opinion case failed all three runs — the model put bare `R1` labels in a "Reviewer \| Comment" table, so the app's source list was empty | 92/96 |
+| `045e4ffa08` table-cell labels and `(R2)` are normalized to `[R2]` in code (a prompt rule alone did not change the habit) | **58/58** before the free tier's daily token cap stopped the run |
 
 Earlier grader fixes: GPT-OSS sometimes writes citations with zero-width spaces inside the
 brackets or with CJK brackets (`【R1】`); both are normalized before matching.
