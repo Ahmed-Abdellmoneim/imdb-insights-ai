@@ -58,6 +58,19 @@ def _secrets_hint() -> str:
     return hint + " Accepted names: LLM_API_KEY, GROQ_API_KEY, groq."
 
 
+def _provider_error(exc: Exception) -> str:
+    """A visitor-facing message; a daily token cap is not fixed by retrying in a minute."""
+    if "tokens per day" in str(exc).lower() or "(tpd)" in str(exc).lower():
+        return (
+            "The assistant has used up today's free language-model quota (it runs on a free "
+            "tier shared by all visitors). Please try again tomorrow."
+        )
+    return (
+        f"The language model is unavailable right now ({type(exc).__name__}). "
+        "Please try again in a minute."
+    )
+
+
 def _render_answer(answer) -> None:
     st.markdown(answer.text)
     from ..assistant.agent import cited_labels
@@ -89,7 +102,8 @@ def assistant_page() -> None:
     st.title("Ask about the movies")
     st.caption(
         "Answers come from this project's data: SQL over the movie tables and search over "
-        "TMDB user reviews. Expand each answer to see its sources and the queries behind it."
+        "reviews from TMDB and from this app's visitors. Expand each answer to see its sources "
+        "and the queries behind it."
     )
     settings = get_settings()
     if not settings.llm_api_key:
@@ -141,10 +155,7 @@ def assistant_page() -> None:
             try:
                 answer = agent.ask(prompt, history=history)
             except Exception as exc:  # noqa: BLE001 - surface provider errors (rate limits) kindly
-                st.error(
-                    f"The language model is unavailable right now ({type(exc).__name__}). "
-                    "Please try again in a minute."
-                )
+                st.error(_provider_error(exc))
                 return
         _render_answer(answer)
     state.chat.append((prompt, answer))

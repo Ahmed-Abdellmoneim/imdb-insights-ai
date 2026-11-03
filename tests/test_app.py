@@ -97,6 +97,14 @@ def test_streamlit_secrets_reach_the_settings(tmp_path, monkeypatch):
     assert get_settings().llm_api_key.get_secret_value() == "gsk_from_secrets"
 
 
+def test_daily_quota_errors_say_tomorrow_not_in_a_minute():
+    from imdb_insights.app.assistant_page import _provider_error
+
+    daily = Exception("Rate limit reached ... on tokens per day (TPD): Limit 200000, Used 199k")
+    assert "tomorrow" in _provider_error(daily)
+    assert "in a minute" in _provider_error(Exception("Rate limit reached on requests per minute"))
+
+
 def test_ask_page_lists_secret_names_but_never_values():
     at = AppTest.from_function(_ask_page_script, default_timeout=30)
     at.secrets["HF_TOKEN"] = "hf_secret_value"

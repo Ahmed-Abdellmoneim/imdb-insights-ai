@@ -9,6 +9,51 @@ and an AI assistant with evaluation, tracing and an MCP server.
 > (2024). IMDb has since blocked automated browsers and put reviews behind sign-in, so v2
 > collects data through official APIs instead of scraping — see [Why APIs](#why-apis-not-scraping).
 
+**Live app: [mn3m-insights.streamlit.app](https://mn3m-insights.streamlit.app)** — on
+Streamlit's free tier it sleeps after a quiet day; click *"Yes, get this app back up!"* and it
+is ready in about 30 seconds.
+
+<table>
+  <tr>
+    <td><img src="docs/images/top250.jpg" alt="Top 250 table with posters, ratings and filters"></td>
+    <td><img src="docs/images/movie.jpg" alt="Movie page with ratings from four sources and crew"></td>
+  </tr>
+  <tr>
+    <td align="center">Our own Top 250, refreshed daily</td>
+    <td align="center">Every movie: IMDb, TMDB, Metacritic and Rotten Tomatoes</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/insights.jpg" alt="Insights page with a chart of films per decade"></td>
+    <td><img src="docs/images/write.jpg" alt="Write a review form with a 1 to 10 rating"></td>
+  </tr>
+  <tr>
+    <td align="center">Insights</td>
+    <td align="center">First-party reviews, moderated by hand</td>
+  </tr>
+</table>
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph collect["Daily refresh (GitHub Actions)"]
+        TMDB[TMDB API] --> ingest[Async ingestion<br/>cache, retries, quotas]
+        OMDb[OMDb API] --> ingest
+        community[(Approved community<br/>reviews)] --> ingest
+        ingest --> rank[Weighted-rating<br/>Top 250 + quality checks]
+        rank --> embed[Review chunks +<br/>bge-small embeddings]
+        embed --> duck[(DuckDB warehouse<br/>+ FTS index)]
+    end
+    duck -->|private HF dataset| app[Streamlit app]
+    app --> agent[Assistant:<br/>guarded SQL + hybrid search]
+    agent <--> llm[Groq free tier<br/>gpt-oss-120b]
+    app --> write[Write a review] -->|private HF dataset| queue[(Submissions)]
+    queue -->|manual moderation| community
+    write --> rater[Rating model<br/>ONNX + ridge head]
+    duck --> mcp[MCP server]
+    agent -.-> traces[(Traces)] -.-> evals[Evaluation<br/>reports]
+```
+
 ## What it does today
 
 ```
