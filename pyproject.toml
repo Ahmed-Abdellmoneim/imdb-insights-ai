@@ -1,6 +1,6 @@
 [project]
 name = "imdb-insights"
-version = "2.0.0.dev0"
+version = "2.0.0"
 description = "IMDb Top 250 data pipeline and AI insights: API ingestion, NLP over reviews, and a RAG assistant."
 readme = "README.md"
 authors = [
