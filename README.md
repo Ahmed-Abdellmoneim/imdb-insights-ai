@@ -35,7 +35,7 @@ is ready in about 30 seconds.
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph collect["Daily refresh (GitHub Actions)"]
         TMDB[TMDB API] --> ingest[Async ingestion<br/>cache, retries, quotas]
         OMDb[OMDb API] --> ingest
