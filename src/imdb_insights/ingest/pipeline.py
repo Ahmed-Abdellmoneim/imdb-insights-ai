@@ -121,12 +121,13 @@ class LanguageTier:
     min_votes: int
 
 
-# Lowest IMDb rating in the Top 250 (8.0) minus the largest observed gap (1.5) and a margin;
-# 20 TMDB votes can already mean the 25,000 IMDb votes the ranking requires.
+# Lowest IMDb rating in the Top 250 (8.0) minus the largest observed gap and a margin. The
+# first run of this tier (2026-11-04) ranked Dil Bechara with a 1.7-point gap and Satluj
+# with ~4,300 IMDb votes per TMDB vote, so the floors went from 6.3 / 20 votes to 6.0 / 10.
 HIGH_IMDB_SHARE_LANGUAGES = LanguageTier(
     languages=("hi", "ta", "te", "kn", "ml", "bn", "mr", "pa", "ur", "tr", "fa"),
-    min_rating=6.3,
-    min_votes=20,
+    min_rating=6.0,
+    min_votes=10,
 )
 
 

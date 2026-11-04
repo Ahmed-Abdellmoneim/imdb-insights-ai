@@ -58,7 +58,7 @@ flowchart TB
 
 ```
 TMDB discover ──► candidates (rating ≥ 6.9 with ≥ 250 votes, plus ≥ 7.0 with 50–249 votes,
-      │            plus Indian/Turkish/Persian films rated ≥ 6.3 with ≥ 20 votes)
+      │            plus Indian/Turkish/Persian films rated ≥ 6.0 with ≥ 10 votes)
       │
       ├─► TMDB /movie/{id}  details · cast & crew · keywords · reviews · IMDb id
       └─► OMDb ?i={imdb_id} IMDb rating & votes · Metascore · Rotten Tomatoes · awards
@@ -83,7 +83,10 @@ TMDB discover ──► candidates (rating ≥ 6.9 with ≥ 250 votes, plus ≥ 
   the floors; all were Indian or Turkish, whose films get 200–900 IMDb votes per TMDB vote
   and are rated up to 1.5 points higher on IMDb. A random pilot of 239 films just outside the
   general floors found no contender, so those stay, and a language tier with its own floors
-  (8.0 − 1.5 − margin = 6.3; 20 votes) covers the films that behave differently.
+  (8.0 − 1.5 − margin = 6.3; 20 votes) covers the films that behave differently. Its first run
+  ranked two films that had been missing (*Satluj* at #46, *Dil Bechara* at #161), both close
+  to the new floors (a 1.7-point gap; ~4,300 IMDb votes per TMDB vote), so the self-check
+  flagged them and the floors moved to 6.0 and 10 votes.
 
 ### Data model (DuckDB: `data/processed/imdb_insights.duckdb`)
 
