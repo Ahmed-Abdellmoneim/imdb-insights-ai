@@ -30,6 +30,12 @@ is ready in about 30 seconds.
     <td align="center">Insights</td>
     <td align="center">First-party reviews, moderated by hand</td>
   </tr>
+  <tr>
+    <td colspan="2"><img src="docs/images/ask.jpg" alt="AI assistant answering a question about Interstellar's pacing with a table of cited review passages"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">AI assistant: SQL for facts, review search for opinions, every claim cited</td>
+  </tr>
 </table>
 
 ## Architecture
