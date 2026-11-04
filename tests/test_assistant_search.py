@@ -89,3 +89,22 @@ def test_find_movie_prefers_exact_title_then_votes(con):
     assert search.find_movie(con, "interstellar").tmdb_id == 1
     assert search.find_movie(con, "dark knight").title == "The Dark Knight"
     assert search.find_movie(con, "No Such Film") is None
+
+
+def test_connect_installs_fts_on_a_fresh_host(monkeypatch, tmp_path):
+    """A rebuilt container has no extensions: LOAD fails until fts is installed once."""
+    calls = []
+
+    class FreshHost:
+        installed = False
+
+        def execute(self, statement):
+            calls.append(statement)
+            if statement == "INSTALL fts":
+                self.installed = True
+            elif statement == "LOAD fts" and not self.installed:
+                raise duckdb.IOException('Extension "fts" not found. Install it first.')
+
+    monkeypatch.setattr(search.duckdb, "connect", lambda *args, **kwargs: FreshHost())
+    search.connect(tmp_path / "w.duckdb")
+    assert calls == ["LOAD fts", "INSTALL fts", "LOAD fts"]

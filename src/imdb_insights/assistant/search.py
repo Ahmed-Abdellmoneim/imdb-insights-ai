@@ -29,7 +29,12 @@ class Movie:
 
 def connect(db_path: Path) -> duckdb.DuckDBPyConnection:
     con = duckdb.connect(str(db_path), read_only=True)
-    con.execute("LOAD fts")
+    try:
+        con.execute("LOAD fts")
+    except duckdb.IOException:
+        # A fresh host (a rebuilt Streamlit Cloud container) has no extensions installed yet.
+        con.execute("INSTALL fts")
+        con.execute("LOAD fts")
     return con
 
 
