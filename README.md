@@ -13,6 +13,14 @@ and an AI assistant with evaluation, tracing and an MCP server.
 Streamlit's free tier it sleeps after a quiet day; click *"Yes, get this app back up!"* and it
 is ready in about 30 seconds.
 
+### Demo
+
+[![Narrated 3-minute demo of IMDb Insights AI](docs/images/demo.jpg)](https://github.com/Ahmed-Abdellmoneim/imdb-insights-ai/releases/download/v2.0.0/imdb-insights-ai-demo.mp4)
+
+A narrated walkthrough recorded from the live app: the Top 250, a movie page, first-party
+reviews, insights, and three questions to the AI assistant, each with the SQL and review
+search behind its answer. [Download the 1080p video](https://github.com/Ahmed-Abdellmoneim/imdb-insights-ai/releases/download/v2.0.0/imdb-insights-ai-demo.mp4) (25 MB).
+
 <table>
   <tr>
     <td><img src="docs/images/top250.jpg" alt="Top 250 table with posters, ratings and filters"></td>
